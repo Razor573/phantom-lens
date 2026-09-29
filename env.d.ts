@@ -59,6 +59,13 @@ interface Window {
       };
       error?: string;
     }>;
+    listGeminiModels: () => Promise<{
+      success: boolean;
+      data?: {
+        models: Array<{ id: string; name: string }>;
+      };
+      error?: string;
+    }>;
     onApiKeyUpdated: (callback: () => void) => () => void;
     onApiKeyMissing: (callback: () => void) => () => void;
     setIgnoreMouseEvents: () => Promise<{ success: boolean; error?: string }>;

@@ -134,6 +134,39 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
     }
   }, "set-api-config"));
 
+  ipcMain.handle("list-gemini-models", createSafeIpcHandler(async () => {
+    try {
+      const apiKey = await getStoreValue("api-key");
+      if (!apiKey) {
+        return { success: false, error: "No API key configured" };
+      }
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`
+      );
+      if (!response.ok) {
+        return { success: false, error: `Gemini API returned status ${response.status}` };
+      }
+
+      const data: any = await response.json();
+      const models = (data.models || [])
+        .filter((m: any) =>
+          Array.isArray(m.supportedGenerationMethods) &&
+          m.supportedGenerationMethods.includes("generateContent")
+        )
+        .map((m: any) => ({
+          id: String(m.name || "").replace(/^models\//, ""),
+          name: m.displayName || String(m.name || "").replace(/^models\//, ""),
+        }))
+        .filter((m: any) => m.id);
+
+      return { success: true, data: { models } };
+    } catch (error: any) {
+      console.error("Error listing Gemini models:", error);
+      return { success: false, error: "Failed to fetch model list" };
+    }
+  }, "list-gemini-models"));
+
   // ============================================================================
   // Usage Counter Handlers
   // ============================================================================

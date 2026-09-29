@@ -58,6 +58,13 @@ interface ElectronAPI {
     };
     error?: string;
   }>;
+  listGeminiModels: () => Promise<{
+    success: boolean;
+    data?: {
+      models: Array<{ id: string; name: string }>;
+    };
+    error?: string;
+  }>;
   onApiKeyUpdated: (callback: () => void) => () => void;
   onApiKeyMissing: (callback: () => void) => () => void;
   onFocusPromptInput: (callback: () => void) => () => void;
@@ -259,6 +266,7 @@ const electronAPI = {
   setApiConfig: (config: { apiKey: string; model: string }) =>
     ipcRenderer.invoke("set-api-config", config),
   getApiConfig: () => ipcRenderer.invoke("get-api-config"),
+  listGeminiModels: () => ipcRenderer.invoke("list-gemini-models"),
   onApiKeyUpdated: (callback: () => void) => {
     const subscription = () => callback();
     ipcRenderer.on("api-key-updated", subscription);
