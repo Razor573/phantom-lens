@@ -67,6 +67,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const [apiKey, setApiKey] = useState("");
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
+  const [customModel, setCustomModel] = useState("");
   const apiKeyInputRef = useRef<HTMLInputElement>(null);
   const modelSelectRef = useRef<HTMLSelectElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
@@ -139,7 +140,14 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         }
         if (configData.model) {
           console.log("Setting model from config:", configData.model);
-          setSelectedModel(configData.model);
+          if (MODEL_OPTIONS.some((m) => m.id === configData.model)) {
+            setSelectedModel(configData.model);
+            setCustomModel("");
+          } else {
+            // Saved model is not one of the presets - show it as a custom model
+            setSelectedModel("custom");
+            setCustomModel(configData.model);
+          }
         }
       } else {
         console.log("No API config found or response unsuccessful:", response);
@@ -284,12 +292,18 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     try {
       console.log("Saving API configuration...");
       console.log("API Key length:", apiKey.length);
-      console.log("Selected model:", selectedModel);
+      const modelToSave = selectedModel === "custom" ? customModel.trim() : selectedModel;
+      console.log("Selected model:", modelToSave);
+
+      if (!modelToSave) {
+        setError("Please enter a model name");
+        return;
+      }
       
       // FIXED: Use real API call to save configuration
       const response = await window.electronAPI.setApiConfig({
         apiKey: apiKey.trim(),
-        model: selectedModel
+        model: modelToSave
       });
       
       console.log("API config save response:", response);
@@ -309,7 +323,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [apiKey, selectedModel, loadCurrentConfig]);
+  }, [apiKey, selectedModel, customModel, loadCurrentConfig]);
 
   // Reset scroll position when tooltip opens and auto-focus API key input
   useEffect(() => {
@@ -528,6 +542,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       
       setApiKey("");
       setSelectedModel(defaultModel);
+      setCustomModel("");
       console.log("Configuration reset successfully");
     } catch (err) {
       console.error("Error resetting configuration:", err);
@@ -801,7 +816,29 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                                   {index + 1}. {model.name}
                       </option>
                     ))}
+                      <option key="custom" value="custom" className="bg-gray-800 text-white">
+                                  {MODEL_OPTIONS.length + 1}. Custom model...
+                      </option>
                   </select>
+                  {selectedModel === "custom" && (
+                    <input
+                      type="text"
+                      value={customModel}
+                      onChange={(e) => {
+                        if (!isInteractive) return;
+                        setCustomModel(e.target.value);
+                      }}
+                      disabled={!isInteractive}
+                      tabIndex={isInteractive ? 0 : -1}
+                      placeholder="e.g. gemini-2.0-flash"
+                      className={`w-full mt-2 px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                        isInteractive
+                          ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20'
+                          : 'cursor-default'
+                      }`}
+                      style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                    />
+                  )}
                         </div>
                 <button
                   ref={saveButtonRef}

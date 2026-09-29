@@ -97,17 +97,8 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         return { success: false, error: "Invalid model selection" };
       }
 
-      // Validate model format for Gemini
-      const validGeminiModels = [
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash"
-      ];
-
-      if (!validGeminiModels.includes(model.trim())) {
-        console.warn(`Unknown model selected: ${model}`);
-      }
+      // Any non-empty model id is accepted - the Gemini API itself
+      // validates whether the key has access to the requested model.
 
       // Store the configuration
       const [successKey, successModel] = await Promise.all([
