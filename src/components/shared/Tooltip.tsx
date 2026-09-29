@@ -68,6 +68,18 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
+  // Refs mirror the latest state so the callbacks below stay stable.
+  // Without these, changing the selection/keystroke would recreate the
+  // callbacks and re-trigger the "load on open" effect, snapping the
+  // dropdown back to the saved (default) model.
+  const apiKeyRef = useRef(apiKey);
+  const selectedModelRef = useRef(selectedModel);
+  useEffect(() => {
+    apiKeyRef.current = apiKey;
+  }, [apiKey]);
+  useEffect(() => {
+    selectedModelRef.current = selectedModel;
+  }, [selectedModel]);
   const apiKeyInputRef = useRef<HTMLInputElement>(null);
   const modelSelectRef = useRef<HTMLSelectElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
@@ -129,7 +141,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Fetch the models available to the configured API key and populate the dropdown.
   // Falls back to the built-in presets when the key is missing or the request fails.
   const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string) => {
-    const key = (keyOverride ?? apiKey).trim();
+    const key = (keyOverride ?? apiKeyRef.current).trim();
     if (!key) return;
     try {
       const response = await window.electronAPI.listGeminiModels();
@@ -139,7 +151,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           name: m.name,
           description: m.id,
         }));
-        const keep = (keepModel ?? selectedModel).trim();
+        const keep = (keepModel ?? selectedModelRef.current).trim();
         const merged = fetched.some((m) => m.id === keep)
           ? fetched
           : [...fetched, { id: keep, name: keep, description: "Currently configured model" }];
@@ -148,7 +160,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     } catch (err) {
       console.warn("Failed to refresh model list, keeping presets:", err);
     }
-  }, [apiKey, selectedModel]);
+  }, []);
 
   const loadCurrentConfig = useCallback(async () => {
     try {
