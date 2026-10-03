@@ -105,6 +105,32 @@ interface ElectronAPI {
   // Prompt
   setUserPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>;
   getUserPrompt: () => Promise<{ success: boolean; data?: { prompt: string }; error?: string }>;
+  // Attached files (file context)
+  selectAndAttachFiles: () => Promise<{
+    success: boolean;
+    data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+    error?: string;
+  }>;
+  getAttachedFiles: () => Promise<{
+    success: boolean;
+    data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+    error?: string;
+  }>;
+  removeAttachedFile: (id: string) => Promise<{
+    success: boolean;
+    data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+    error?: string;
+  }>;
+  clearAttachedFiles: () => Promise<{
+    success: boolean;
+    data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+    error?: string;
+  }>;
+  onAttachedFilesChanged: (
+    callback: (files: Array<{ id: string; name: string; charCount: number; truncated: boolean }>) => void
+  ) => () => void;
+  onAttachFilesError: (callback: (error: string) => void) => () => void;
+  onToggleAskInput: (callback: () => void) => () => void;
   // Settings
   onOpenSettings: (callback: () => void) => () => void;
   onSettingsUnlock: (callback: () => void) => () => void;
@@ -336,6 +362,25 @@ const electronAPI = {
   },
   setUserPrompt: (prompt: string) => ipcRenderer.invoke("set-user-prompt", prompt),
   getUserPrompt: () => ipcRenderer.invoke("get-user-prompt"),
+  selectAndAttachFiles: () => ipcRenderer.invoke("select-and-attach-files"),
+  getAttachedFiles: () => ipcRenderer.invoke("get-attached-files"),
+  removeAttachedFile: (id: string) => ipcRenderer.invoke("remove-attached-file", id),
+  clearAttachedFiles: () => ipcRenderer.invoke("clear-attached-files"),
+  onAttachedFilesChanged: (callback: (files: Array<{ id: string; name: string; charCount: number; truncated: boolean }>) => void) => {
+    const sub = (_: any, files: Array<{ id: string; name: string; charCount: number; truncated: boolean }>) => callback(files);
+    ipcRenderer.on("attached-files-changed", sub);
+    return () => ipcRenderer.removeListener("attached-files-changed", sub);
+  },
+  onAttachFilesError: (callback: (error: string) => void) => {
+    const sub = (_: any, error: string) => callback(error);
+    ipcRenderer.on("attach-files-error", sub);
+    return () => ipcRenderer.removeListener("attach-files-error", sub);
+  },
+  onToggleAskInput: (callback: () => void) => {
+    const sub = () => callback();
+    ipcRenderer.on("toggle-ask-input", sub);
+    return () => ipcRenderer.removeListener("toggle-ask-input", sub);
+  },
   onResponseChunk: (callback: (chunk: string) => void) => {
     const subscription = (_: any, chunk: string) => callback(chunk);
     ipcRenderer.on(PROCESSING_EVENTS.RESPONSE_CHUNK, subscription);

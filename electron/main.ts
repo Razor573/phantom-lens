@@ -1,11 +1,13 @@
-import { BrowserWindow, app, screen, Menu } from "electron";
+import { BrowserWindow, app, screen, Menu, dialog } from "electron";
 import { ProcessingHelper } from "./ProcessingHelper";
 import { ScreenCaptureHelper } from "./ScreenCaptureHelper";
 import { ScreenshotHelper } from "./ScreenshotHelper";
 import { ShortcutsHelper } from "./shortcuts";
 import { initializeIpcHandlers } from "./ipcHandlers";
 import { incrementAppOpenCounter } from "./UsageCounter";
+import { extractFileText, ATTACH_DIALOG_FILTERS } from "./fileTextExtractor";
 import path from "path";
+import { randomUUID } from "crypto";
 
 let store: any = null;
 // Write lock to prevent concurrent writes to config file
@@ -317,6 +319,25 @@ interface State {
   currentPrompt: string | null;
   history: string[];
   historyIndex: number;
+  attachedFiles: AttachedFile[];
+}
+
+/** A user-attached file whose text is sent to the model as context. */
+export interface AttachedFile {
+  id: string;
+  name: string;
+  path: string;
+  text: string;
+  charCount: number;
+  truncated: boolean;
+}
+
+/** Metadata about attached files (safe to send to the renderer). */
+export interface AttachedFileMeta {
+  id: string;
+  name: string;
+  charCount: number;
+  truncated: boolean;
 }
 
 const state: State = {
@@ -341,6 +362,7 @@ const state: State = {
   currentPrompt: null,
   history: [],
   historyIndex: -1,
+  attachedFiles: [],
   PROCESSING_EVENTS: {
     API_KEY_INVALID: "processing-api-key-invalid",
     INITIAL_START: "initial-start",
@@ -368,6 +390,7 @@ export interface IProcessingHelperDeps {
   getUserPrompt: () => string | null;
   clearUserPrompt: () => void;
   getPreviousResponse: () => string | null;
+  getAttachedFilesContext: () => string;
 }
 
 export interface IShortcutsHelperDeps {
@@ -395,6 +418,7 @@ export interface IShortcutsHelperDeps {
   scrollResponseBy: (delta: number) => void;
   scrollCodeBlockBy: (delta: number) => void;
   getUserPromptValue: () => string | null;
+  openAttachFileDialog: () => Promise<AttachedFileMeta[]>;
 }
 
 export interface initializeIpcHandlerDeps {
@@ -1006,6 +1030,7 @@ function initializeHelpers() {
     getUserPrompt: () => state.currentPrompt,
     clearUserPrompt: () => { state.currentPrompt = null; },
     getPreviousResponse: () => state.processingHelper?.getPreviousResponse() || null,
+    getAttachedFilesContext,
   } as IProcessingHelperDeps);
 
   state.shortcutsHelper = new ShortcutsHelper({
@@ -1033,6 +1058,7 @@ function initializeHelpers() {
     scrollResponseBy,
     scrollCodeBlockBy,
     getUserPromptValue: () => state.currentPrompt,
+    openAttachFileDialog,
   } as unknown as IShortcutsHelperDeps);
 }
 
@@ -1437,6 +1463,93 @@ export function setUserPrompt(prompt: string) {
 
 export function getUserPromptValue(): string | null {
   return state.currentPrompt;
+}
+
+// ============================================================================
+// Attached files (natively-style file context)
+// ============================================================================
+
+function toAttachedFileMeta(f: AttachedFile): AttachedFileMeta {
+  return { id: f.id, name: f.name, charCount: f.charCount, truncated: f.truncated };
+}
+
+function notifyAttachedFilesChanged() {
+  const mainWindow = state.mainWindow;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(
+      "attached-files-changed",
+      state.attachedFiles.map(toAttachedFileMeta)
+    );
+  }
+}
+
+export function getAttachedFilesMeta(): AttachedFileMeta[] {
+  return state.attachedFiles.map(toAttachedFileMeta);
+}
+
+/** Formatted file context prepended to the model prompt. */
+export function getAttachedFilesContext(): string {
+  if (state.attachedFiles.length === 0) return "";
+  const parts = state.attachedFiles.map(
+    (f) => `### ${f.name}\n${f.text}`
+  );
+  return parts.join("\n\n");
+}
+
+/**
+ * Open the native file picker, extract text from the chosen files and store
+ * them as model context. Returns the updated metadata list.
+ */
+export async function openAttachFileDialog(): Promise<AttachedFileMeta[]> {
+  const mainWindow = state.mainWindow;
+  const parent =
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined;
+  const result = await dialog.showOpenDialog(parent, {
+    title: "Attach files for AI context",
+    properties: ["openFile", "multiSelections"],
+    filters: ATTACH_DIALOG_FILTERS,
+  });
+  if (result.canceled || result.filePaths.length === 0) {
+    return getAttachedFilesMeta();
+  }
+
+  const errors: string[] = [];
+  for (const filePath of result.filePaths) {
+    // Skip duplicates (same path already attached)
+    if (state.attachedFiles.some((f) => f.path === filePath)) continue;
+    try {
+      const { text, truncated } = await extractFileText(filePath);
+      state.attachedFiles.push({
+        id: randomUUID(),
+        name: path.basename(filePath),
+        path: filePath,
+        text,
+        charCount: text.length,
+        truncated,
+      });
+    } catch (err: any) {
+      errors.push(`${path.basename(filePath)}: ${err?.message || "could not be read"}`);
+    }
+  }
+
+  notifyAttachedFilesChanged();
+
+  if (errors.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("attach-files-error", errors.join("\n"));
+  }
+  return getAttachedFilesMeta();
+}
+
+export function removeAttachedFile(id: string): AttachedFileMeta[] {
+  state.attachedFiles = state.attachedFiles.filter((f) => f.id !== id);
+  notifyAttachedFilesChanged();
+  return getAttachedFilesMeta();
+}
+
+export function clearAttachedFiles(): AttachedFileMeta[] {
+  state.attachedFiles = [];
+  notifyAttachedFilesChanged();
+  return getAttachedFilesMeta();
 }
 
 function navigateHistoryPrev() {

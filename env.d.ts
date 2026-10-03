@@ -93,6 +93,31 @@ interface Window {
     // Prompt
     setUserPrompt: (prompt: string) => Promise<{ success: boolean; error?: string }>;
     getUserPrompt: () => Promise<{ success: boolean; data?: { prompt: string }; error?: string }>;
+    selectAndAttachFiles: () => Promise<{
+      success: boolean;
+      data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+      error?: string;
+    }>;
+    getAttachedFiles: () => Promise<{
+      success: boolean;
+      data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+      error?: string;
+    }>;
+    removeAttachedFile: (id: string) => Promise<{
+      success: boolean;
+      data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+      error?: string;
+    }>;
+    clearAttachedFiles: () => Promise<{
+      success: boolean;
+      data?: { files: Array<{ id: string; name: string; charCount: number; truncated: boolean }> };
+      error?: string;
+    }>;
+    onAttachedFilesChanged: (
+      callback: (files: Array<{ id: string; name: string; charCount: number; truncated: boolean }>) => void
+    ) => () => void;
+    onAttachFilesError: (callback: (error: string) => void) => () => void;
+    onToggleAskInput: (callback: () => void) => () => void;
     // Settings
     onOpenSettings: (callback: () => void) => () => void;
     onSettingsUnlock: (callback: () => void) => () => void;

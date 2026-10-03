@@ -441,6 +441,20 @@ export class ProcessingHelper {
         }
       } catch {}
 
+      // Include attached file context (natively-style file reading)
+      try {
+        const fileContext = this.deps.getAttachedFilesContext?.();
+        if (fileContext && fileContext.trim().length > 0) {
+          promptLines.push(
+            `## Attached Files`,
+            `The user attached the following file(s). Use their contents as context when answering.`,
+            ``,
+            fileContext.trim(),
+            ``
+          );
+        }
+      } catch {}
+
       promptLines.push(
         `---`,
         `Your response MUST follow this structure, using Markdown headings:`,
@@ -671,6 +685,20 @@ export class ProcessingHelper {
       if (userPrompt && userPrompt.trim().length > 0) {
         promptLines.push(`## Additional User Question`, "", userPrompt.trim(), "");
       }
+
+      // Include attached file context (natively-style file reading)
+      try {
+        const fileContext = this.deps.getAttachedFilesContext?.();
+        if (fileContext && fileContext.trim().length > 0) {
+          promptLines.push(
+            `## Attached Files`,
+            `The user attached the following file(s). Use their contents as context when answering.`,
+            ``,
+            fileContext.trim(),
+            ``
+          );
+        }
+      } catch {}
 
       // Add context about the previous response if available
       try {

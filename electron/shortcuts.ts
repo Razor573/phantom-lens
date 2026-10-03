@@ -129,6 +129,23 @@ export class ShortcutsHelper {
           mainWindow.webContents.send("open-settings");
         }
       },
+      // Attach files for AI context (natively-style file reading)
+      "CommandOrControl+O": async () => {
+        console.log("Command/Ctrl + O pressed. Opening file picker...");
+        try {
+          await this.deps.openAttachFileDialog();
+        } catch (error) {
+          console.error("Failed to attach files:", error);
+        }
+      },
+      // Toggle the "type a question" input
+      "CommandOrControl+K": () => {
+        console.log("Command/Ctrl + K pressed. Toggling ask input...");
+        const mainWindow = this.deps.getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("toggle-ask-input");
+        }
+      },
       // Download Update
       "CommandOrControl+Shift+U": () => {
         console.log("Command/Ctrl + Shift + U pressed. Opening update download...");

@@ -1,11 +1,13 @@
 import { BackslashIcon, EnterIcon } from "./icons";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings } from "lucide-react";
+import { Settings, Paperclip, X } from "lucide-react";
+import { createPortal } from "react-dom";
 import phantomlensLogo from "../../assets/icons/phantomlens_logo.svg";
 
 import { COMMAND_KEY } from "../utils/platform";
 import Tooltip from "./shared/Tooltip";
+import PromptInput from "./shared/PromptInput";
 
 // Hook to track transparency mode
 function useTransparencyMode() {
@@ -81,6 +83,86 @@ export default function Commands({
     releaseUrl?: string;
   } | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+
+  // Attached files (natively-style file context)
+  const [attachedFiles, setAttachedFiles] = useState<
+    Array<{ id: string; name: string; charCount: number; truncated: boolean }>
+  >([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  // "Type a question" input (natively-style written questions)
+  const [askOpen, setAskOpen] = useState(false);
+
+  const removeAttachedFile = useCallback(async (id: string) => {
+    try {
+      const res = await window.electronAPI.removeAttachedFile(id);
+      if (res?.success && res.data) setAttachedFiles(res.data.files);
+    } catch (error) {
+      console.error("Failed to remove attached file:", error);
+    }
+  }, []);
+
+  // Load attached files on mount and keep in sync with the backend
+  useEffect(() => {
+    let cancelled = false;
+    window.electronAPI
+      .getAttachedFiles?.()
+      .then((res) => {
+        if (!cancelled && res?.success && res.data) {
+          setAttachedFiles(res.data.files);
+        }
+      })
+      .catch(() => {});
+    const cleanups = [
+      window.electronAPI.onAttachedFilesChanged?.((files) => {
+        if (!cancelled) setAttachedFiles(files);
+      }),
+      window.electronAPI.onAttachFilesError?.((err) => {
+        if (!cancelled) {
+          setAttachError(err);
+          setTimeout(() => {
+            if (!cancelled) setAttachError(null);
+          }, 6000);
+        }
+      }),
+    ];
+    return () => {
+      cancelled = true;
+      cleanups.forEach((fn) => fn?.());
+    };
+  }, []);
+
+  // Toggle the ask input via the Ctrl+K global shortcut
+  useEffect(() => {
+    const cleanup = window.electronAPI.onToggleAskInput?.(() => {
+      setAskOpen((v) => !v);
+    });
+    return () => {
+      cleanup?.();
+    };
+  }, []);
+
+  // While the ask input is open the window must accept typing/clicks;
+  // restore stealth click-through when it closes.
+  useEffect(() => {
+    const enter = async () => {
+      try {
+        await window.electronAPI.setInteractiveMouseEvents?.();
+      } catch {}
+      try {
+        await window.electronAPI.restoreInteractiveMode?.();
+      } catch {}
+    };
+    const exit = async () => {
+      try {
+        await window.electronAPI.enableSafeClickThrough?.();
+      } catch {}
+    };
+    if (askOpen) {
+      enter();
+    } else {
+      exit();
+    }
+  }, [askOpen]);
 
   // Check for updates - only set if update is available, never clear it
   const checkForUpdate = useCallback(async () => {
@@ -170,6 +252,18 @@ export default function Commands({
       id: "reset",
       label: "Reset",
       keys: [COMMAND_KEY, "R"],
+      show: true,
+    },
+    {
+      id: "attach",
+      label: "Attach",
+      keys: [COMMAND_KEY, "O"],
+      show: true,
+    },
+    {
+      id: "ask",
+      label: "Ask",
+      keys: [COMMAND_KEY, "K"],
       show: true,
     },
     {
@@ -546,6 +640,54 @@ export default function Commands({
           </div>
         </div>
 
+        {/* Attached files strip - shows files sent as AI context */}
+        <AnimatePresence>
+          {(attachedFiles.length > 0 || attachError) && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.2 }}
+              className="flex items-center gap-1.5 px-3 pt-1.5 flex-wrap"
+              style={{ pointerEvents: "auto" }}
+            >
+              <Paperclip
+                className="h-3 w-3 text-white/50 flex-shrink-0"
+                style={{ opacity: isTransparent ? 0.4 : 1 }}
+              />
+              {attachedFiles.map((file) => (
+                <div
+                  key={file.id}
+                  className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-white/80"
+                  style={{
+                    background: isTransparent
+                      ? "transparent"
+                      : "rgba(255, 255, 255, 0.08)",
+                    border: isTransparent
+                      ? "none"
+                      : "1px solid rgba(255, 255, 255, 0.15)",
+                    fontFamily:
+                      "'Helvetica Neue', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+                  }}
+                  title={`${file.name} (${Math.round(file.charCount / 1000)}k chars${file.truncated ? ", truncated" : ""})`}
+                >
+                  <span className="max-w-[140px] truncate">{file.name}</span>
+                  <button
+                    onClick={() => removeAttachedFile(file.id)}
+                    className="flex items-center justify-center w-3.5 h-3.5 rounded-full text-white/50 hover:text-white hover:bg-white/15 transition-colors"
+                    title="Remove file"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                </div>
+              ))}
+              {attachError && (
+                <span className="text-[11px] text-red-300/90">{attachError}</span>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Update Banner - shows below header if update is available */}
         <AnimatePresence>
           {updateInfo?.updateAvailable && (
@@ -631,6 +773,30 @@ export default function Commands({
         </AnimatePresence>
 
       </motion.div>
+
+      {/* "Type a question" input - toggled with Ctrl+K, rendered as an overlay
+          below the command bar so the layout stays untouched */}
+      {askOpen &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              top: 64,
+              left: "50%",
+              transform: "translateX(-50%)",
+              zIndex: 100000,
+              pointerEvents: "auto",
+            }}
+          >
+            <PromptInput
+              isVisible={askOpen}
+              onClose={() => setAskOpen(false)}
+              onFollowUp={view === "response" || view === "followup"}
+            />
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

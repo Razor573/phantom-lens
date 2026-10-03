@@ -897,6 +897,20 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                   >Ctrl + ,</kbd>
                 </div>
                 <div className="flex justify-between items-center py-1">
+                  <span className="text-white/80">Attach Files (AI context)</span>
+                  <kbd 
+                    className={`px-2 py-1 rounded-md text-white/90 font-mono text-xs ${isTransparent ? '' : 'bg-white/20 border border-white/30'}`}
+                    style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                  >Ctrl + O</kbd>
+                </div>
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-white/80">Type a Question</span>
+                  <kbd 
+                    className={`px-2 py-1 rounded-md text-white/90 font-mono text-xs ${isTransparent ? '' : 'bg-white/20 border border-white/30'}`}
+                    style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                  >Ctrl + K</kbd>
+                </div>
+                <div className="flex justify-between items-center py-1">
                   <span className="text-white/80">Ask AI / Send Query</span>
                   <kbd 
                     className={`px-2 py-1 rounded-md text-white/90 font-mono text-xs ${isTransparent ? '' : 'bg-white/20 border border-white/30'}`}

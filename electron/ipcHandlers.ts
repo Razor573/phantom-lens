@@ -663,6 +663,47 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
     }
   }, "get-user-prompt"));
 
+  // ===================== Attached files IPC =====================
+  ipcMain.handle("select-and-attach-files", createSafeIpcHandler(async () => {
+    try {
+      const main = require("./main");
+      const files = await main.openAttachFileDialog();
+      return { success: true, data: { files } };
+    } catch (error: any) {
+      return { success: false, error: error.message || String(error) };
+    }
+  }, "select-and-attach-files"));
+
+  ipcMain.handle("get-attached-files", createSafeIpcHandler(async () => {
+    try {
+      const main = require("./main");
+      const files = main.getAttachedFilesMeta();
+      return { success: true, data: { files } };
+    } catch (error: any) {
+      return { success: false, error: error.message || String(error) };
+    }
+  }, "get-attached-files"));
+
+  ipcMain.handle("remove-attached-file", createSafeIpcHandler(async (_e: any, id: string) => {
+    try {
+      const main = require("./main");
+      const files = main.removeAttachedFile(id);
+      return { success: true, data: { files } };
+    } catch (error: any) {
+      return { success: false, error: error.message || String(error) };
+    }
+  }, "remove-attached-file"));
+
+  ipcMain.handle("clear-attached-files", createSafeIpcHandler(async () => {
+    try {
+      const main = require("./main");
+      const files = main.clearAttachedFiles();
+      return { success: true, data: { files } };
+    } catch (error: any) {
+      return { success: false, error: error.message || String(error) };
+    }
+  }, "clear-attached-files"));
+
   // ===================== Emergency Recovery Handler =====================
   ipcMain.handle("emergency-visibility-recovery", createSafeIpcHandler(async () => {
     try {
