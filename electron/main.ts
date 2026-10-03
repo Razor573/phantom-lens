@@ -4,6 +4,7 @@ import { ScreenCaptureHelper } from "./ScreenCaptureHelper";
 import { ScreenshotHelper } from "./ScreenshotHelper";
 import { ShortcutsHelper } from "./shortcuts";
 import { initializeIpcHandlers } from "./ipcHandlers";
+import { StealthKeyboardManager } from "./StealthKeyboardManager";
 import { incrementAppOpenCounter } from "./UsageCounter";
 import { extractFileText, ATTACH_DIALOG_FILTERS } from "./fileTextExtractor";
 import path from "path";
@@ -306,6 +307,7 @@ interface State {
   currentX: number;
   currentY: number;
   shortcutsHelper: any;
+  stealthKeyboard: StealthKeyboardManager | null;
   hasFollowedUp: boolean;
   PROCESSING_EVENTS: ProcessingEvents;
   screenshotHelper: any;
@@ -350,6 +352,7 @@ const state: State = {
   currentX: 0,
   currentY: 0,
   shortcutsHelper: null,
+  stealthKeyboard: null,
   hasFollowedUp: false,
   screenshotHelper: null,
   processingHelper: null,
@@ -446,6 +449,7 @@ export interface initializeIpcHandlerDeps {
   enableInteractiveOverride: () => void;
   disableInteractiveOverride: () => void;
   isInteractiveOverrideEnabled: () => boolean;
+  stealthKeyboard: StealthKeyboardManager | null;
 }
 
 // ============================================================================
@@ -804,8 +808,11 @@ function setWindowDimensions(width: number | string, height: number): void {
           console.log(`[FIXED] BLOCKING small height decrease (height diff: ${heightDiff}px) - preventing tooltip shift`);
           isUpdatingDimensions = false;
           return;
-        } else if (currentBounds.height >= 400 && finalHeight < currentBounds.height) {
-          // Block height decreases when current height is already sufficient
+        } else if (currentBounds.height >= 400 && finalHeight < currentBounds.height && finalHeight > 260) {
+          // Block height decreases between tall states (prevents tooltip shift),
+          // but always allow shrinking back to the base window height (260) -
+          // e.g. when the settings panel closes - otherwise the window would
+          // stay tall forever.
           console.log(`[FIXED] BLOCKING height decrease - current height (${currentBounds.height}px) already sufficient`);
           isUpdatingDimensions = false;
           return;
@@ -1062,6 +1069,9 @@ function initializeHelpers() {
     openAttachFileDialog,
     removeLastAttachedFile,
   } as unknown as IShortcutsHelperDeps);
+
+  // Stealth keyboard hook for focus-free typing (natively-style).
+  state.stealthKeyboard = new StealthKeyboardManager(() => state.mainWindow);
 }
 
 function getMainWindow(): BrowserWindow | null {
@@ -1167,6 +1177,7 @@ function createWindow(): BrowserWindow {
     console.log("Window finished loading");
     applyInteractivityState();
   });
+
 
   state.mainWindow.webContents.on("did-fail-load", (event: any, errorCode: number, errorDescription: string) => {
     console.error("Window failed to load:", errorCode, errorDescription);
@@ -1322,6 +1333,8 @@ function toggleMainWindow(): void {
     }
     state.mainWindow?.hide();
     state.isWindowVisible = false;
+    // Never leave the stealth keyboard hook swallowing keys while hidden.
+    state.stealthKeyboard?.stop();
   } else {
     console.log("Window not usable, showing it.");
     if (!state.mainWindow || state.mainWindow.isDestroyed()) {
@@ -1422,6 +1435,7 @@ async function initializeApp() {
       enableInteractiveOverride,
       disableInteractiveOverride,
       isInteractiveOverrideEnabled,
+      stealthKeyboard: state.stealthKeyboard,
     });
     
     createWindow();

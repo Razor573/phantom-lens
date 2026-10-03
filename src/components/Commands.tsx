@@ -141,10 +141,22 @@ export default function Commands({
     };
   }, []);
 
-  // While the ask input is open the window must accept typing/clicks;
-  // restore stealth click-through when it closes.
+  // Stealth typing (natively-style): while the ask input is open, prefer the
+  // native keyboard hook so the window never takes focus; fall back to the
+  // classic focus-the-window flow when the hook is unavailable. Restore
+  // stealth click-through when it closes.
+  const [stealthTyping, setStealthTyping] = useState(false);
+
   useEffect(() => {
     const enter = async () => {
+      try {
+        const res = await window.electronAPI.startStealthTyping?.();
+        if (res?.success && res.data?.stealth) {
+          setStealthTyping(true);
+          return;
+        }
+      } catch {}
+      setStealthTyping(false);
       try {
         await window.electronAPI.focusWindow?.();
       } catch {}
@@ -156,6 +168,10 @@ export default function Commands({
       } catch {}
     };
     const exit = async () => {
+      setStealthTyping(false);
+      try {
+        await window.electronAPI.stopStealthTyping?.();
+      } catch {}
       try {
         await window.electronAPI.enableSafeClickThrough?.();
       } catch {}
@@ -854,6 +870,7 @@ export default function Commands({
               isVisible={askOpen}
               onClose={() => setAskOpen(false)}
               onFollowUp={view === "response" || view === "followup"}
+              stealthTyping={stealthTyping}
             />
           </div>,
           document.body

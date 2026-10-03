@@ -119,6 +119,16 @@ interface Window {
     onAttachFilesError: (callback: (error: string) => void) => () => void;
     onToggleAskInput: (callback: () => void) => () => void;
     focusWindow: () => Promise<{ success: boolean; error?: string }>;
+    // Stealth keyboard (natively-style focus-free typing)
+    startStealthTyping: () => Promise<{
+      success: boolean;
+      data?: { stealth: boolean };
+      error?: string;
+    }>;
+    stopStealthTyping: () => Promise<{ success: boolean; error?: string }>;
+    onStealthKey: (
+      callback: (ev: { kind: "char" | "backspace" | "enter" | "escape"; char?: string }) => void
+    ) => () => void;
     // Settings
     onOpenSettings: (callback: () => void) => () => void;
     onSettingsUnlock: (callback: () => void) => () => void;

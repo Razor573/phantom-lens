@@ -61,6 +61,11 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  // Adaptive tooltip height: grows to fit the settings content (up to a
+  // screen-relative cap) so the panel is never clipped; the window is grown
+  // to match. Falls back to the fixed base height.
+  const requiredHeightRef = useRef(0);
   const [isVisible, setIsVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -133,7 +138,11 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   }, [isVisible, deactivateInteractiveMode]);
 
   // FIXED: Use glass folder approach - fixed height with internal scrolling
-  const TOOLTIP_HEIGHT = 420; // Fixed height for consistent window sizing
+  const TOOLTIP_HEIGHT = 420; // Base height; grows adaptively to fit content
+  // Adaptive tooltip height: grows to fit the settings content (up to a
+  // screen-relative cap) so the panel is never clipped; the window is grown
+  // to match.
+  const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_HEIGHT);
   const TOOLTIP_WIDTH = 340; // Increased width for better readability
   const BASE_WINDOW_HEIGHT = 260;
 
@@ -472,53 +481,83 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     return { top, left };
   };
 
-  // FIXED: Use actual measured height like og version - this prevents cropping.
-  // Single measurement after the enter animation settles; duplicate rapid
-  // updates used to race each other through the main-process rate limiter
-  // and the losing (wrong-sized) one could stick, clipping the bottom.
+  // FIXED: Measure the real content height and size the tooltip to fit it
+  // (capped to a fraction of the screen), instead of a fixed 420px box that
+  // always needed internal scrolling. Single measurement after the enter
+  // animation settles, plus one self-healing re-check in case the
+  // main-process rate limiter dropped the first update.
   useEffect(() => {
     if (onVisibilityChange) {
       // Use setTimeout to ensure tooltip is fully rendered before measuring
+      let verifyTimer: ReturnType<typeof setTimeout> | undefined;
       const timeout = setTimeout(() => {
         let height = 0;
         if (tooltipRef.current && isVisible) {
-          // Keep tooltip height constrained to fixed value and rely on scrolling
-          const measuredHeight = TOOLTIP_HEIGHT;
-          height = measuredHeight + 30; // Padding for breathing room
-          
+          let panelHeight = TOOLTIP_HEIGHT;
+          const content = contentRef.current;
+          if (content) {
+            // Full content height + room for padding; cap at 72% of the
+            // available screen height so the window stays on screen.
+            const maxPanel = Math.floor(window.screen.availHeight * 0.72);
+            panelHeight = Math.max(
+              TOOLTIP_HEIGHT,
+              Math.min(content.scrollHeight + 100, maxPanel)
+            );
+          }
+          setTooltipHeight(panelHeight);
+          height = panelHeight;
+
           // Also update window dimensions when tooltip is visible
           const position = getTooltipPosition();
           // Generous bottom padding so the tooltip never clips
-          const requiredHeight = Math.max(position.top + height + 60, BASE_WINDOW_HEIGHT);
-          
+          const requiredHeight = Math.max(position.top + panelHeight + 60, BASE_WINDOW_HEIGHT);
+          requiredHeightRef.current = requiredHeight;
+
           console.log('Tooltip height calculation:', {
-            offsetHeight: tooltipRef.current.offsetHeight,
-            scrollHeight: tooltipRef.current.scrollHeight,
-            measuredHeight,
-            heightWithPadding: height,
+            contentScrollHeight: content?.scrollHeight,
+            panelHeight,
             tooltipTop: position.top,
             requiredHeight,
             currentWindowHeight: window.innerHeight
           });
-          
-          window.electronAPI.updateContentDimensions({ 
+
+          window.electronAPI.updateContentDimensions({
             width: 'fixed',
-            height: requiredHeight 
+            height: requiredHeight
           }).catch(error => {
             console.error('Failed to expand window:', error);
           });
+
+          // Self-healing: if the window didn't grow (blocked/dropped update),
+          // try once more after things settle.
+          verifyTimer = setTimeout(() => {
+            if (requiredHeightRef.current > 0 && window.innerHeight < requiredHeightRef.current - 20) {
+              console.log('Tooltip window still too short, re-applying height:', requiredHeightRef.current);
+              window.electronAPI.updateContentDimensions({
+                width: 'fixed',
+                height: requiredHeightRef.current
+              }).catch(error => {
+                console.error('Failed to expand window on retry:', error);
+              });
+            }
+          }, 700);
         } else if (!isVisible) {
           // When closing, reset to base height
+          setTooltipHeight(TOOLTIP_HEIGHT);
+          requiredHeightRef.current = 0;
           window.electronAPI.updateContentDimensions({
             width: 'fixed',
             height: BASE_WINDOW_HEIGHT
           });
         }
-        
+
         onVisibilityChange(isVisible, height);
       }, isVisible ? 250 : 0); // Wait for the 200ms enter animation before measuring
-      
-      return () => clearTimeout(timeout);
+
+      return () => {
+        clearTimeout(timeout);
+        if (verifyTimer) clearTimeout(verifyTimer);
+      };
     }
   }, [isVisible, onVisibilityChange]);
 
@@ -558,8 +597,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       style={{
         zIndex: 99999, // FIXED: Very high z-index to ensure it's above everything
         width: `${TOOLTIP_WIDTH}px`,
-        height: `${TOOLTIP_HEIGHT}px`,
-        maxHeight: `${TOOLTIP_HEIGHT}px`,
+        height: `${tooltipHeight}px`,
+        maxHeight: `${tooltipHeight}px`,
         overflow: 'hidden',
         top: `${getTooltipPosition().top}px`,
         left: `${getTooltipPosition().left}px`,
@@ -595,8 +634,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           ref={scrollContainerRef}
           className="tooltip-scroll"
               style={{
-            height: `${TOOLTIP_HEIGHT - 60}px`, // Subtract header height
-            maxHeight: `${TOOLTIP_HEIGHT - 60}px`,
+            height: `${tooltipHeight - 60}px`, // Subtract header height
+            maxHeight: `${tooltipHeight - 60}px`,
             overflowY: 'auto',
             scrollbarWidth: 'thin',
             scrollbarColor: isTransparent 
@@ -604,7 +643,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
               : 'rgba(255, 255, 255, 0.3) rgba(0, 0, 0, 0.1)',
           }}
         >
-          <div className="space-y-4 px-4 py-3">
+          <div ref={contentRef} className="space-y-4 px-4 py-3">
             {/* Header with donation link and made with love message */}
             <div 
               className={`flex items-center justify-center mb-4 pb-3 ${isTransparent ? '' : 'border-b border-white/10'}`}

@@ -673,6 +673,30 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
     }
   }, "focus-window"));
 
+  // ===================== Stealth keyboard (natively-style typing) =====================
+  // Begins a stealth typing session: the native hook swallows keystrokes and
+  // forwards them as "stealth-key" events, so the window never takes focus.
+  // Returns { stealth: true } when the hook is live; the renderer falls back
+  // to focus-based typing when it is not available.
+  ipcMain.handle("start-stealth-typing", createSafeIpcHandler(async () => {
+    try {
+      const started = deps.stealthKeyboard?.start() ?? false;
+      return { success: true, data: { stealth: started } };
+    } catch (error: any) {
+      console.error("[IPC] start-stealth-typing failed:", error);
+      return { success: false, data: { stealth: false }, error: error.message || String(error) };
+    }
+  }, "start-stealth-typing"));
+
+  ipcMain.handle("stop-stealth-typing", createSafeIpcHandler(async () => {
+    try {
+      deps.stealthKeyboard?.stop();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message || String(error) };
+    }
+  }, "stop-stealth-typing"));
+
   // ===================== Attached files IPC =====================
   ipcMain.handle("select-and-attach-files", createSafeIpcHandler(async () => {
     try {

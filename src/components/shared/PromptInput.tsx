@@ -4,12 +4,17 @@ interface PromptInputProps {
   isVisible: boolean;
   onClose: () => void;
   onFollowUp?: boolean;
+  /** Natively-style focus-free typing: keystrokes arrive via the native hook. */
+  stealthTyping?: boolean;
 }
 
-export default function PromptInput({ isVisible, onClose, onFollowUp = false }: PromptInputProps) {
+export default function PromptInput({ isVisible, onClose, onFollowUp = false, stealthTyping = false }: PromptInputProps) {
   const [mode, setMode] = useState<"normal"|"stealth">("normal");
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  // Mirrors of latest state for the native-hook callbacks (no stale closures).
+  const valueRef = useRef("");
+  const submitRef = useRef(() => {});
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
@@ -27,23 +32,52 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
     };
   }, []);
 
-  // Focus input when component becomes visible
+  // Focus input when component becomes visible (not in stealth-typing mode:
+  // the window never takes focus there, keys arrive via the native hook).
   useEffect(() => {
+    if (stealthTyping) return;
     if (isVisible && inputRef.current) {
       setTimeout(() => {
         inputRef.current?.focus();
       }, 100);
     }
-  }, [isVisible]);
+  }, [isVisible, stealthTyping]);
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
+  // Stealth typing: accumulate keystrokes delivered by the native hook.
+  useEffect(() => {
+    if (!stealthTyping || !isVisible) return;
+    const unsub = window.electronAPI.onStealthKey?.((ev) => {
+      if (ev.kind === "char" && ev.char) {
+        setValue((prev) => {
+          const next = (prev + ev.char!).slice(0, 4000);
+          valueRef.current = next;
+          return next;
+        });
+      } else if (ev.kind === "backspace") {
+        setValue((prev) => {
+          const next = prev.slice(0, -1);
+          valueRef.current = next;
+          return next;
+        });
+      } else if (ev.kind === "enter") {
+        submitRef.current();
+      } else if (ev.kind === "escape") {
+        valueRef.current = "";
+        setValue("");
+        onClose();
+      }
+    });
+    return () => { unsub?.(); };
+  }, [stealthTyping, isVisible, onClose]);
+
+  const doSubmit = async () => {
+    const text = valueRef.current.trim();
+
     // In follow-up mode, allow empty submissions
-    if (!onFollowUp && !value.trim()) return;
-    
+    if (!onFollowUp && !text) return;
+
     // Save the prompt (even if empty in follow-up mode)
-    await window.electronAPI.setUserPrompt(value.trim());
+    await window.electronAPI.setUserPrompt(text);
     
     // In follow-up mode, trigger follow-up processing
     if (onFollowUp) {
@@ -69,13 +103,23 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
     }
     
     // Clear the value but don't close in follow-up mode
+    valueRef.current = "";
     setValue("");
+  };
+
+  // Keep the ref/submit indirection fresh every render (no stale closures).
+  submitRef.current = doSubmit;
+
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    doSubmit();
   };
   
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Escape key closes the input
     if (e.key === 'Escape') {
       onClose();
+      valueRef.current = "";
       setValue("");
       return;
     }
@@ -124,7 +168,42 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
         {mode}
       </div>
 
-      {/* Input Field */}
+      {/* Input Field - in stealth-typing mode this is a display fed by the
+          native keyboard hook (the window never takes focus); otherwise a
+          classic input. */}
+      {stealthTyping ? (
+        <div
+          className="flex-1 text-sm"
+          style={{
+            background: 'rgba(0, 0, 0, 0.2)',
+            borderRadius: '20px',
+            padding: '10px 14px',
+            color: value ? 'white' : 'rgba(255, 255, 255, 0.5)',
+            fontFamily: "'Helvetica Neue', sans-serif",
+            fontWeight: '400',
+            minHeight: '38px',
+            display: 'flex',
+            alignItems: 'center',
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {value || (onFollowUp ? "Type a follow-up question (or press Enter to send without text)" : "Type a prompt and press Enter")}
+          </span>
+          <span
+            style={{
+              display: 'inline-block',
+              width: '2px',
+              height: '16px',
+              background: 'white',
+              marginLeft: '2px',
+              flexShrink: 0,
+              animation: 'stealth-caret-blink 1s step-end infinite',
+            }}
+          />
+        </div>
+      ) : (
       <input
         ref={inputRef}
         type="text"
@@ -139,12 +218,13 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
         }}
         placeholder={onFollowUp ? "Type a follow-up question (or press Enter to send without text)" : "Type a prompt and press Enter"}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e) => { valueRef.current = e.target.value; setValue(e.target.value); }}
         onKeyDown={handleKeyDown}
         onFocus={(e) => {
           e.target.style.outline = 'none';
         }}
       />
+      )}
 
       {/* Submit Button */}
       <button
@@ -184,6 +264,7 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
         type="button"
         onClick={() => {
           onClose();
+          valueRef.current = "";
           setValue("");
         }}
         className="flex items-center justify-center w-5 h-5 rounded-full transition-all duration-150 flex-shrink-0"
@@ -217,6 +298,10 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
         }
         input:focus {
           outline: none !important;
+        }
+        @keyframes stealth-caret-blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
         }
       `}</style>
     </form>

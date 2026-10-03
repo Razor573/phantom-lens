@@ -132,6 +132,16 @@ interface ElectronAPI {
   onAttachFilesError: (callback: (error: string) => void) => () => void;
   onToggleAskInput: (callback: () => void) => () => void;
   focusWindow: () => Promise<{ success: boolean; error?: string }>;
+  // Stealth keyboard (natively-style focus-free typing)
+  startStealthTyping: () => Promise<{
+    success: boolean;
+    data?: { stealth: boolean };
+    error?: string;
+  }>;
+  stopStealthTyping: () => Promise<{ success: boolean; error?: string }>;
+  onStealthKey: (
+    callback: (ev: { kind: "char" | "backspace" | "enter" | "escape"; char?: string }) => void
+  ) => () => void;
   // Settings
   onOpenSettings: (callback: () => void) => () => void;
   onSettingsUnlock: (callback: () => void) => () => void;
@@ -383,6 +393,13 @@ const electronAPI = {
     return () => ipcRenderer.removeListener("toggle-ask-input", sub);
   },
   focusWindow: () => ipcRenderer.invoke("focus-window"),
+  startStealthTyping: () => ipcRenderer.invoke("start-stealth-typing"),
+  stopStealthTyping: () => ipcRenderer.invoke("stop-stealth-typing"),
+  onStealthKey: (callback) => {
+    const sub = (_: any, ev: { kind: string; char?: string }) => callback(ev as any);
+    ipcRenderer.on("stealth-key", sub);
+    return () => ipcRenderer.removeListener("stealth-key", sub);
+  },
   onResponseChunk: (callback: (chunk: string) => void) => {
     const subscription = (_: any, chunk: string) => callback(chunk);
     ipcRenderer.on(PROCESSING_EVENTS.RESPONSE_CHUNK, subscription);
