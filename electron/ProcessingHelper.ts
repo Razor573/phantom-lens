@@ -132,6 +132,21 @@ export class ProcessingHelper {
   }
 
   /**
+   * Readability rules appended to every prompt so answers come back as short
+   * paragraphs that fit a narrow window - vertical scrolling only, never a
+   * single long line that needs horizontal scrolling.
+   */
+  private addReadabilityRules(promptLines: string[]): void {
+    promptLines.push(
+      `---`,
+      `READABILITY (must follow):`,
+      `- Break the answer into short paragraphs separated by blank lines. Never emit one long unbroken block of text.`,
+      `- Use bullet or numbered lists for steps, options, or multiple points.`,
+      `- Keep lines reasonably short so the text fits a narrow window without any horizontal scrolling.`
+    );
+  }
+
+  /**
    * Groq chat-completions (OpenAI-compatible) streaming.
    * Yields { text() } chunks so consumeStreamWithTimeout can be reused as-is.
    */
@@ -611,6 +626,7 @@ export class ProcessingHelper {
         `Remember: If audio is provided, reference it naturally in your response. Focus on the solution itself.`,
         `CODE FORMATTING: Use ONLY \`\`\` WITH the language specifier for all code blocks.`
       );
+      this.addReadabilityRules(promptLines);
       const prompt = promptLines.join("\n");
 
       if (signal.aborted) throw new Error("Request aborted");
@@ -936,6 +952,7 @@ export class ProcessingHelper {
         `Remember: If audio is provided, reference it naturally in your response. Focus on the solution itself.`,
         `CODE FORMATTING: Use ONLY \`\`\` WITH the language specifier for all code blocks.`
       );
+      this.addReadabilityRules(promptLines);
       const prompt = promptLines.join("\n");
 
       if (signal.aborted) throw new Error("Request aborted");

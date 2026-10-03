@@ -126,7 +126,7 @@ export const MarkdownSection = ({
               ),
               pre: ({ node, ...props }) => (
                 <pre
-                  className={`overflow-x-auto rounded-lg text-white/90 text-sm whitespace-pre-wrap break-words p-4 code-block-scroll mb-4 max-w-full ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
+                  className={`overflow-x-hidden rounded-lg text-white/90 text-sm whitespace-pre-wrap break-words p-4 code-block-scroll mb-4 max-w-full ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
                   style={{
                     ...(isTransparent ? { background: 'transparent', border: 'none' } : {}),
                     overflowWrap: 'break-word',
