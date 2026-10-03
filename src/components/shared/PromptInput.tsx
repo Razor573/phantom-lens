@@ -57,15 +57,12 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false }: 
         console.error("Error processing follow-up:", error);
       }
     } else {
-      // In normal mode, trigger screenshot and process
-      if (mode === "normal") {
-        try {
-          // Capture a screenshot then process
-          await window.electronAPI.triggerScreenshot();
-          await window.electronAPI.processScreenshots();
-        } catch (error) {
-          console.error("Error processing:", error);
-        }
+      // Capture a screenshot then process with the typed prompt
+      try {
+        await window.electronAPI.triggerScreenshot();
+        await window.electronAPI.processScreenshots();
+      } catch (error) {
+        console.error("Error processing:", error);
       }
       // Close the input only in normal mode
       onClose();

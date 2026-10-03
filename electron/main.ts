@@ -1465,6 +1465,16 @@ export function getUserPromptValue(): string | null {
   return state.currentPrompt;
 }
 
+/** Bring the overlay window to the foreground with keyboard focus (for typing). */
+export function focusMainWindow(): void {
+  const w = state.mainWindow;
+  if (w && !w.isDestroyed()) {
+    try {
+      w.focus();
+    } catch {}
+  }
+}
+
 // ============================================================================
 // Attached files (natively-style file context)
 // ============================================================================

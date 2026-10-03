@@ -118,6 +118,7 @@ interface Window {
     ) => () => void;
     onAttachFilesError: (callback: (error: string) => void) => () => void;
     onToggleAskInput: (callback: () => void) => () => void;
+    focusWindow: () => Promise<{ success: boolean; error?: string }>;
     // Settings
     onOpenSettings: (callback: () => void) => () => void;
     onSettingsUnlock: (callback: () => void) => () => void;

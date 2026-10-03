@@ -663,6 +663,16 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
     }
   }, "get-user-prompt"));
 
+  ipcMain.handle("focus-window", createSafeIpcHandler(async () => {
+    try {
+      const main = require("./main");
+      main.focusMainWindow?.();
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message || String(error) };
+    }
+  }, "focus-window"));
+
   // ===================== Attached files IPC =====================
   ipcMain.handle("select-and-attach-files", createSafeIpcHandler(async () => {
     try {

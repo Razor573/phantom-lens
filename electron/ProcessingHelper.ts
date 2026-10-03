@@ -82,6 +82,51 @@ export class ProcessingHelper {
     this.processingTimeouts.clear();
   }
 
+  /**
+   * Consume a Gemini stream with an overall timeout. The SDK's async iterator
+   * does not reject when our AbortSignal fires while it is still waiting for
+   * the first chunk, so without this a stalled stream would spin forever in
+   * the UI with no error. The timeout throws STREAM_TIMEOUT, which the
+   * callers map to a user-facing message.
+   */
+  private async consumeStreamWithTimeout(
+    stream: AsyncIterable<any>,
+    onChunk: (chunkText: string) => void,
+    signal: AbortSignal,
+    timeoutMs: number = 100_000
+  ): Promise<void> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      await Promise.race([
+        (async () => {
+          for await (const chunk of stream) {
+            if (signal.aborted) throw new Error("Request aborted");
+            onChunk(chunk.text());
+          }
+        })(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("STREAM_TIMEOUT")), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Classify a Gemini failure as rate-limit / overload / timeout so the UI
+   * can show an actionable message instead of a raw SDK error (or nothing).
+   */
+  private classifyModelError(error: any): "rate_limited" | "overloaded" | "timeout" | null {
+    const text =
+      `${error?.message || ""} ${error?.status || ""} ` +
+      `${error?.response?.data ? JSON.stringify(error.response.data) : ""}`;
+    if (error?.message === "STREAM_TIMEOUT") return "timeout";
+    if (/429|resource[\s_-]*exhausted|too many requests|quota/i.test(text)) return "rate_limited";
+    if (/503|overloaded|too many users|service unavailable/i.test(text)) return "overloaded";
+    return null;
+  }
+
   public async processScreenshots(): Promise<void> {
     if (this.isCurrentlyProcessing) {
       console.log("Processing already in progress. Skipping duplicate call.");
@@ -494,24 +539,22 @@ export class ProcessingHelper {
         ]);
 
         accumulatedText = "";
-        for await (const chunk of result.stream) {
-          // Check for abort between chunks
-          if (signal.aborted) {
-            throw new Error("Request aborted");
-          }
-          
-          const chunkText = chunk.text();
-          accumulatedText += chunkText;
+        await this.consumeStreamWithTimeout(
+          result.stream,
+          (chunkText) => {
+            accumulatedText += chunkText;
 
-          // Send chunk to UI for live markdown rendering
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            chunksSent = true; // Mark that we've sent at least one chunk
-            mainWindow.webContents.send(
-              this.deps.PROCESSING_EVENTS.RESPONSE_CHUNK,
-              { response: accumulatedText }
-            );
-          }
-        }
+            // Send chunk to UI for live markdown rendering
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              chunksSent = true; // Mark that we've sent at least one chunk
+              mainWindow.webContents.send(
+                this.deps.PROCESSING_EVENTS.RESPONSE_CHUNK,
+                { response: accumulatedText }
+              );
+            }
+          },
+          signal
+        );
 
         responseText = accumulatedText;
 
@@ -560,6 +603,29 @@ export class ProcessingHelper {
           );
         }
         return { success: false, error: "Response generation canceled." };
+      }
+
+      // Rate-limit / overload / stall: surface an actionable message instead
+      // of spinning forever or dumping a raw SDK error.
+      const modelFailure = this.classifyModelError(error);
+      if (modelFailure) {
+        const friendly =
+          modelFailure === "rate_limited"
+            ? "429: Gemini rate limit reached - too many requests right now. Wait a few seconds and try again, or switch to a different model in settings."
+            : modelFailure === "overloaded"
+              ? "The selected model is overloaded right now. Try again in a bit, or switch to a different model in settings."
+              : "The request timed out waiting for the model. Please try again.";
+        this.cancelOngoingRequests();
+        this.deps.clearQueues();
+        this.deps.setView("initial");
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("reset-view");
+          mainWindow.webContents.send(
+            this.deps.PROCESSING_EVENTS.INITIAL_RESPONSE_ERROR,
+            friendly
+          );
+        }
+        return { success: false, error: friendly };
       }
 
       if (error.code === "ETIMEDOUT" || error.response?.status === 504) {
@@ -756,23 +822,21 @@ export class ProcessingHelper {
         ]);
 
         let accumulatedText = "";
-        for await (const chunk of result.stream) {
-          // Check for abort between chunks
-          if (signal.aborted) {
-            throw new Error("Request aborted");
-          }
-          
-          const chunkText = chunk.text();
-          accumulatedText += chunkText;
+        await this.consumeStreamWithTimeout(
+          result.stream,
+          (chunkText) => {
+            accumulatedText += chunkText;
 
-          // Send chunk to UI for live markdown rendering
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send(
-              this.deps.PROCESSING_EVENTS.FOLLOW_UP_CHUNK,
-              { response: accumulatedText }
-            );
-          }
-        }
+            // Send chunk to UI for live markdown rendering
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(
+                this.deps.PROCESSING_EVENTS.FOLLOW_UP_CHUNK,
+                { response: accumulatedText }
+              );
+            }
+          },
+          signal
+        );
 
         followUpResponse = accumulatedText;
 
@@ -804,6 +868,19 @@ export class ProcessingHelper {
 
       if (error.message === "Request aborted" || error.name === "AbortError") {
         return { success: false, error: "Follow-up processing canceled." };
+      }
+
+      // Rate-limit / overload / stall: return an actionable message instead
+      // of a raw SDK error (surfaced via FOLLOW_UP_ERROR by the caller).
+      const modelFailure = this.classifyModelError(error);
+      if (modelFailure) {
+        const friendly =
+          modelFailure === "rate_limited"
+            ? "429: Gemini rate limit reached - too many requests right now. Wait a few seconds and try again, or switch to a different model in settings."
+            : modelFailure === "overloaded"
+              ? "The selected model is overloaded right now. Try again in a bit, or switch to a different model in settings."
+              : "The request timed out waiting for the model. Please try again.";
+        return { success: false, error: friendly };
       }
 
       // Special handling for image validation errors

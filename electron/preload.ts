@@ -131,6 +131,7 @@ interface ElectronAPI {
   ) => () => void;
   onAttachFilesError: (callback: (error: string) => void) => () => void;
   onToggleAskInput: (callback: () => void) => () => void;
+  focusWindow: () => Promise<{ success: boolean; error?: string }>;
   // Settings
   onOpenSettings: (callback: () => void) => () => void;
   onSettingsUnlock: (callback: () => void) => () => void;
@@ -381,6 +382,7 @@ const electronAPI = {
     ipcRenderer.on("toggle-ask-input", sub);
     return () => ipcRenderer.removeListener("toggle-ask-input", sub);
   },
+  focusWindow: () => ipcRenderer.invoke("focus-window"),
   onResponseChunk: (callback: (chunk: string) => void) => {
     const subscription = (_: any, chunk: string) => callback(chunk);
     ipcRenderer.on(PROCESSING_EVENTS.RESPONSE_CHUNK, subscription);

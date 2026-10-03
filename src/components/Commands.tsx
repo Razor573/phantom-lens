@@ -1,7 +1,7 @@
 import { BackslashIcon, EnterIcon } from "./icons";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Settings, Paperclip, X } from "lucide-react";
+import { Settings, Paperclip, Keyboard, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import phantomlensLogo from "../../assets/icons/phantomlens_logo.svg";
 
@@ -146,6 +146,9 @@ export default function Commands({
   useEffect(() => {
     const enter = async () => {
       try {
+        await window.electronAPI.focusWindow?.();
+      } catch {}
+      try {
         await window.electronAPI.setInteractiveMouseEvents?.();
       } catch {}
       try {
@@ -163,6 +166,20 @@ export default function Commands({
       exit();
     }
   }, [askOpen]);
+
+  // Grow the window when the attached-files strip appears so it never clips,
+  // and restore the base height when it goes away.
+  const chipsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const extra = chipsRef.current ? chipsRef.current.offsetHeight : 0;
+      const base = view === "initial" ? 260 : view === "followup" ? 700 : 660;
+      window.electronAPI
+        .updateContentDimensions?.({ width: "fixed", height: base + extra })
+        .catch(() => {});
+    }, 260);
+    return () => clearTimeout(t);
+  }, [attachedFiles.length, attachError, view]);
 
   // Check for updates - only set if update is available, never clear it
   const checkForUpdate = useCallback(async () => {
@@ -252,18 +269,6 @@ export default function Commands({
       id: "reset",
       label: "Reset",
       keys: [COMMAND_KEY, "R"],
-      show: true,
-    },
-    {
-      id: "attach",
-      label: "Attach",
-      keys: [COMMAND_KEY, "O"],
-      show: true,
-    },
-    {
-      id: "ask",
-      label: "Ask",
-      keys: [COMMAND_KEY, "K"],
       show: true,
     },
     {
@@ -607,6 +612,34 @@ export default function Commands({
             )}
           </AnimatePresence>
 
+          {/* Attach / Ask icons - visual only, triggered via shortcuts (Ctrl+O / Ctrl+K) */}
+          <div
+            className="flex items-center gap-2 flex-shrink-0"
+            style={{
+              pointerEvents: 'none', // Not clickable - use shortcuts instead
+            }}
+            title="Attach files: Ctrl+O · Type a question: Ctrl+K"
+          >
+            <div className="w-4 h-4 flex items-center justify-center">
+              <Paperclip
+                className="h-4 w-4 text-white/60 transition-colors"
+                style={{
+                  opacity: isTransparent ? 0.4 : 1,
+                  transition: 'opacity 0.3s ease'
+                }}
+              />
+            </div>
+            <div className="w-4 h-4 flex items-center justify-center">
+              <Keyboard
+                className="h-4 w-4 text-white/60 transition-colors"
+                style={{
+                  opacity: isTransparent ? 0.4 : 1,
+                  transition: 'opacity 0.3s ease'
+                }}
+              />
+            </div>
+          </div>
+
           {/* Settings icon - visual only, opened via shortcut (Ctrl + ,) */}
           <div 
             className="relative inline-block"
@@ -644,6 +677,7 @@ export default function Commands({
         <AnimatePresence>
           {(attachedFiles.length > 0 || attachError) && (
             <motion.div
+              ref={chipsRef}
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
