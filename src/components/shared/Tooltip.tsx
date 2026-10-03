@@ -57,6 +57,31 @@ const MODEL_OPTIONS = [
   },
 ];
 
+// Fallback presets when the Groq model list cannot be fetched.
+const GROQ_MODEL_OPTIONS = [
+  {
+    id: "openai/gpt-oss-120b",
+    name: "GPT-OSS 120B",
+    description: "Large open model via Groq (free tier)",
+    default: true,
+  },
+  {
+    id: "openai/gpt-oss-20b",
+    name: "GPT-OSS 20B",
+    description: "Smaller fast open model via Groq (free tier)",
+  },
+  {
+    id: "qwen/qwen3-32b",
+    name: "Qwen3 32B",
+    description: "Qwen3 via Groq (free tier)",
+  },
+];
+
+const defaultModelFor = (p: "gemini" | "groq") =>
+  p === "groq"
+    ? GROQ_MODEL_OPTIONS.find((m) => m.default)?.id || "openai/gpt-oss-120b"
+    : MODEL_OPTIONS.find((m) => m.default)?.id || "gemini-2.5-flash";
+
 export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -70,6 +95,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [groqApiKey, setGroqApiKey] = useState("");
+  const [provider, setProvider] = useState<"gemini" | "groq">("gemini");
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
@@ -78,10 +105,18 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // callbacks and re-trigger the "load on open" effect, snapping the
   // dropdown back to the saved (default) model.
   const apiKeyRef = useRef(apiKey);
+  const groqApiKeyRef = useRef(groqApiKey);
+  const providerRef = useRef(provider);
   const selectedModelRef = useRef(selectedModel);
   useEffect(() => {
     apiKeyRef.current = apiKey;
   }, [apiKey]);
+  useEffect(() => {
+    groqApiKeyRef.current = groqApiKey;
+  }, [groqApiKey]);
+  useEffect(() => {
+    providerRef.current = provider;
+  }, [provider]);
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
@@ -149,11 +184,14 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Load configuration function - defined before useEffect
   // Fetch the models available to the configured API key and populate the dropdown.
   // Falls back to the built-in presets when the key is missing or the request fails.
-  const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string) => {
-    const key = (keyOverride ?? apiKeyRef.current).trim();
+  const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string, providerOverride?: "gemini" | "groq") => {
+    const prov = providerOverride ?? providerRef.current;
+    const key = (keyOverride ?? (prov === "groq" ? groqApiKeyRef.current : apiKeyRef.current)).trim();
     if (!key) return;
     try {
-      const response = await window.electronAPI.listGeminiModels();
+      const response = prov === "groq"
+        ? await window.electronAPI.listGroqModels()
+        : await window.electronAPI.listGeminiModels();
       if (response?.success && response.data && response.data.models.length > 0) {
         const fetched = response.data.models.map((m) => ({
           id: m.id,
@@ -179,16 +217,19 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       console.log("API config response:", response);
       if (response?.success && response.data) {
         const configData = response.data;
+        const prov = configData.provider === "groq" ? "groq" : "gemini";
+        setProvider(prov);
         if (configData.apiKey) {
           console.log("Setting API key from config");
-          setApiKey(configData.apiKey);
+          if (prov === "groq") setGroqApiKey(configData.apiKey);
+          else setApiKey(configData.apiKey);
         }
         if (configData.model) {
           console.log("Setting model from config:", configData.model);
           setSelectedModel(configData.model);
         }
         if (configData.apiKey) {
-          await refreshModelList(configData.apiKey, configData.model);
+          await refreshModelList(configData.apiKey, configData.model, prov);
         }
       } else {
         console.log("No API config found or response unsuccessful:", response);
@@ -297,19 +338,40 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   }, [updateInfo]);
 
   // Save configuration handler
+  // Switch provider from the settings UI: refresh the model list against the
+  // new provider's key, or fall back to its presets when no key is saved yet.
+  const handleProviderSwitch = useCallback((p: "gemini" | "groq") => {
+    setProvider(p);
+    const key = (p === "groq" ? groqApiKeyRef.current : apiKeyRef.current).trim();
+    if (key) {
+      refreshModelList(key, selectedModelRef.current, p);
+    } else {
+      const presets = p === "groq" ? GROQ_MODEL_OPTIONS : MODEL_OPTIONS;
+      const keep = selectedModelRef.current.trim();
+      setAvailableModels(
+        presets.some((m) => m.id === keep)
+          ? presets
+          : [...presets, { id: keep, name: keep, description: "Currently configured model" }]
+      );
+    }
+  }, [refreshModelList]);
+
   const handleSaveConfig = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     
     try {
       console.log("Saving API configuration...");
-      console.log("API Key length:", apiKey.length);
+      const activeKey = provider === "groq" ? groqApiKey : apiKey;
+      console.log("Provider:", provider);
+      console.log("API Key length:", activeKey.length);
       console.log("Selected model:", selectedModel);
     
       // FIXED: Use real API call to save configuration
       const response = await window.electronAPI.setApiConfig({
-        apiKey: apiKey.trim(),
-        model: selectedModel
+        apiKey: activeKey.trim(),
+        model: selectedModel,
+        provider
       });
       
       console.log("API config save response:", response);
@@ -329,7 +391,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     } finally {
       setIsLoading(false);
     }
-  }, [apiKey, selectedModel, loadCurrentConfig]);
+  }, [apiKey, groqApiKey, provider, selectedModel, loadCurrentConfig]);
 
   // Reset scroll position when tooltip opens and auto-focus API key input
   useEffect(() => {
@@ -575,11 +637,13 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       // FIXED: Clear the configuration using the real API
       await window.electronAPI.setApiConfig({
         apiKey: "",
-        model: defaultModel
+        model: defaultModelFor(providerRef.current),
+        provider: providerRef.current
       });
       
-      setApiKey("");
-      setSelectedModel(defaultModel);
+      if (providerRef.current === "groq") setGroqApiKey("");
+      else setApiKey("");
+      setSelectedModel(defaultModelFor(providerRef.current));
       console.log("Configuration reset successfully");
     } catch (err) {
       console.error("Error resetting configuration:", err);
@@ -810,18 +874,44 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
               <h3 className="text-sm font-medium text-white mb-2 text-center">API Configuration</h3>
               <div className="space-y-3">
                   <div>
-                  <label className="block text-xs text-white/70 mb-1 text-center">Gemini API Key</label>
+                  <label className="block text-xs text-white/70 mb-1 text-center">Provider</label>
+                  <div className="flex gap-2 justify-center">
+                    {(["gemini", "groq"] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => {
+                          if (!isInteractive) return;
+                          handleProviderSwitch(p);
+                        }}
+                        disabled={!isInteractive}
+                        tabIndex={isInteractive ? 0 : -1}
+                        className={`px-4 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${
+                          provider === p
+                            ? isTransparent ? 'text-white' : 'bg-blue-500/30 border border-blue-400/60 text-white'
+                            : isTransparent ? 'text-white/50' : 'bg-white/5 border border-white/10 text-white/50'
+                        } ${isInteractive ? 'hover:bg-blue-500/20 cursor-pointer' : 'cursor-default'}`}
+                        style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                      >
+                        {p === "gemini" ? "Gemini" : "Groq"}
+                      </button>
+                    ))}
+                  </div>
+                  </div>
+                  <div>
+                  <label className="block text-xs text-white/70 mb-1 text-center">{provider === "groq" ? "Groq API Key" : "Gemini API Key"}</label>
                   <input
                       ref={apiKeyInputRef}
                       type="password"
-                      value={apiKey}
+                      value={provider === "groq" ? groqApiKey : apiKey}
                     onChange={(e) => {
                       if (!isInteractive) return;
-                      setApiKey(e.target.value);
+                      if (provider === "groq") setGroqApiKey(e.target.value);
+                      else setApiKey(e.target.value);
                     }}
                     disabled={!isInteractive}
                     tabIndex={isInteractive ? 0 : -1}
-                    placeholder="AIza..."
+                    placeholder={provider === "groq" ? "gsk_..." : "AIza..."}
                     className={`w-full px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
                       isInteractive 
                         ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20' 

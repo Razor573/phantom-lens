@@ -64,16 +64,18 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // ============================================================================
   ipcMain.handle("get-api-config", createSafeIpcHandler(async () => {
     try {
-      const apiKey = await getStoreValue("api-key");
+      const provider = (await getStoreValue("api-provider")) || "gemini";
+      const keyName = provider === "groq" ? "groq-api-key" : "api-key";
+      const apiKey = await getStoreValue(keyName);
       const model = (await getStoreValue("api-model")) || "gemini-3-flash-preview";
 
       if (!apiKey) {
         return { success: false, error: "API key not found" };
       }
 
-      return { 
-        success: true, 
-        data: { apiKey, model, provider: "gemini" }
+      return {
+        success: true,
+        data: { apiKey, model, provider }
       };
     } catch (error: any) {
       console.error("Error getting API config:", error);
@@ -83,10 +85,12 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("set-api-config", createSafeIpcHandler(async (
     _event: any,
-    config: { apiKey: string; model: string }
+    config: { apiKey: string; model: string; provider?: string }
   ) => {
     try {
       const { apiKey, model } = config;
+      const provider = config.provider === "groq" ? "groq" : "gemini";
+      const keyName = provider === "groq" ? "groq-api-key" : "api-key";
 
       // Enhanced validation
       if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
@@ -97,27 +101,29 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         return { success: false, error: "Invalid model selection" };
       }
 
-      // Any non-empty model id is accepted - the Gemini API itself
+      // Any non-empty model id is accepted - the provider API itself
       // validates whether the key has access to the requested model.
 
-      // Store the configuration
-      const [successKey, successModel] = await Promise.all([
-        setStoreValue("api-key", apiKey.trim()),
-        setStoreValue("api-model", model.trim())
+      // Store the configuration (keys are kept per-provider so switching
+      // providers never loses the other provider's key)
+      const [successKey, successModel, successProvider] = await Promise.all([
+        setStoreValue(keyName, apiKey.trim()),
+        setStoreValue("api-model", model.trim()),
+        setStoreValue("api-provider", provider)
       ]);
 
-      if (!successKey || !successModel) {
+      if (!successKey || !successModel || !successProvider) {
         console.error("Failed to save one or more API config values to store.");
-        return { 
-          success: false, 
-          error: "Failed to save configuration to storage" 
+        return {
+          success: false,
+          error: "Failed to save configuration to storage"
         };
       }
 
       // Set environment variables
       process.env.API_KEY = apiKey.trim();
       process.env.API_MODEL = model.trim();
-      process.env.API_PROVIDER = "gemini";
+      process.env.API_PROVIDER = provider;
 
       // Notify that the config has been updated
       const mainWindow = deps.getMainWindow();
@@ -166,6 +172,37 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       return { success: false, error: "Failed to fetch model list" };
     }
   }, "list-gemini-models"));
+
+  // Groq uses an OpenAI-compatible API: GET /openai/v1/models with a Bearer key.
+  ipcMain.handle("list-groq-models", createSafeIpcHandler(async () => {
+    try {
+      const apiKey = await getStoreValue("groq-api-key");
+      if (!apiKey) {
+        return { success: false, error: "No Groq API key configured" };
+      }
+
+      const response = await fetch("https://api.groq.com/openai/v1/models", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+      });
+      if (!response.ok) {
+        return { success: false, error: `Groq API returned status ${response.status}` };
+      }
+
+      const data: any = await response.json();
+      const models = (data.data || [])
+        .map((m: any) => ({
+          id: String(m.id || ""),
+          name: String(m.id || ""),
+        }))
+        .filter((m: any) => m.id)
+        .sort((a: any, b: any) => a.id.localeCompare(b.id));
+
+      return { success: true, data: { models } };
+    } catch (error: any) {
+      console.error("Error listing Groq models:", error);
+      return { success: false, error: "Failed to fetch model list" };
+    }
+  }, "list-groq-models"));
 
   // ============================================================================
   // Usage Counter Handlers
@@ -676,15 +713,17 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // ===================== Stealth keyboard (natively-style typing) =====================
   // Begins a stealth typing session: the native hook swallows keystrokes and
   // forwards them as "stealth-key" events, so the window never takes focus.
-  // Returns { stealth: true } when the hook is live; the renderer falls back
-  // to focus-based typing when it is not available.
+  // Returns { stealth: true } when the hook is live, otherwise
+  // { stealth: false, error } explaining why - the renderer shows the error
+  // and does NOT fall back to focus-based typing.
   ipcMain.handle("start-stealth-typing", createSafeIpcHandler(async () => {
     try {
       const started = deps.stealthKeyboard?.start() ?? false;
-      return { success: true, data: { stealth: started } };
+      const error = started ? undefined : (deps.stealthKeyboard?.getLastError() || "Stealth typing is unavailable on this machine.");
+      return { success: true, data: { stealth: started, error } };
     } catch (error: any) {
       console.error("[IPC] start-stealth-typing failed:", error);
-      return { success: false, data: { stealth: false }, error: error.message || String(error) };
+      return { success: false, data: { stealth: false, error: error.message || String(error) }, error: error.message || String(error) };
     }
   }, "start-stealth-typing"));
 

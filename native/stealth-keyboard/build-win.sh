@@ -3,7 +3,7 @@
 # Produces native/stealth-keyboard/prebuilt/win32-x64/stealth_keyboard.node
 #
 # The addon does NOT link against node.lib: every NAPI function is resolved
-# at load time from the host executable via GetProcAddress, so the binary
+# at load time via GetProcAddress (host exe, then node.dll/libnode.dll), so the binary
 # works whatever the host exe is named (electron.exe, PhantomLens.exe...).
 #
 # Usage: ./build-win.sh [path-to-node-headers-include]

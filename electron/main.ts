@@ -1360,14 +1360,16 @@ function quitApplication(): void {
 
 async function loadEnvVariables() {
   try {
-    const storedApiKey = await getStoreValue("api-key");
+    const provider = (await getStoreValue("api-provider")) || "gemini";
+    const keyName = provider === "groq" ? "groq-api-key" : "api-key";
+    const storedApiKey = await getStoreValue(keyName);
     const storedModel = (await getStoreValue("api-model")) || "gemini-2.0-flash";
 
     if (storedApiKey && storedModel) {
-      process.env.API_PROVIDER = "gemini";
+      process.env.API_PROVIDER = provider;
       process.env.API_KEY = storedApiKey;
       process.env.API_MODEL = storedModel;
-      console.log(`API configuration loaded: Provider=gemini, Model=${storedModel}`);
+      console.log(`API configuration loaded: Provider=${provider}, Model=${storedModel}`);
     } else {
       console.log("No API key found in user preferences. User will be prompted to enter one.");
       setTimeout(() => {

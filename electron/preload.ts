@@ -65,6 +65,13 @@ interface ElectronAPI {
     };
     error?: string;
   }>;
+  listGroqModels: () => Promise<{
+    success: boolean;
+    data?: {
+      models: Array<{ id: string; name: string }>;
+    };
+    error?: string;
+  }>;
   onApiKeyUpdated: (callback: () => void) => () => void;
   onApiKeyMissing: (callback: () => void) => () => void;
   onFocusPromptInput: (callback: () => void) => () => void;
@@ -135,7 +142,7 @@ interface ElectronAPI {
   // Stealth keyboard (natively-style focus-free typing)
   startStealthTyping: () => Promise<{
     success: boolean;
-    data?: { stealth: boolean };
+    data?: { stealth: boolean; error?: string };
     error?: string;
   }>;
   stopStealthTyping: () => Promise<{ success: boolean; error?: string }>;
@@ -300,10 +307,11 @@ const electronAPI = {
   getStoreValue: (key: string) => ipcRenderer.invoke("get-store-value", key),
   setStoreValue: (key: string, value: any) =>
     ipcRenderer.invoke("set-store-value", key, value),
-  setApiConfig: (config: { apiKey: string; model: string }) =>
+  setApiConfig: (config: { apiKey: string; model: string; provider?: string }) =>
     ipcRenderer.invoke("set-api-config", config),
   getApiConfig: () => ipcRenderer.invoke("get-api-config"),
   listGeminiModels: () => ipcRenderer.invoke("list-gemini-models"),
+  listGroqModels: () => ipcRenderer.invoke("list-groq-models"),
   onApiKeyUpdated: (callback: () => void) => {
     const subscription = () => callback();
     ipcRenderer.on("api-key-updated", subscription);

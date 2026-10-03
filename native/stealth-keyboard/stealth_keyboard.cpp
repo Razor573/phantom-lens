@@ -7,9 +7,10 @@
 // ever taking focus (the "natively" stealth-typing approach).
 //
 // Linking note: the NAPI functions are NOT linked at build time. They are
-// resolved at load time from the host executable (electron.exe / the
-// packaged app) via GetProcAddress. This keeps the binary working no
-// matter what the host exe is named, and avoids needing node.lib.
+// resolved at load time via GetProcAddress, probing the host exe first and
+// then node.dll / libnode.dll (Electron on Windows keeps NAPI in node.dll,
+// not in the exe). This keeps the binary working no matter what the host
+// exe is named, and avoids needing node.lib.
 //
 // Build (cross-compile from Linux):
 //   x86_64-w64-mingw32-g++ -shared -O2 -o stealth_keyboard.node \
@@ -63,18 +64,35 @@ struct NapiApi {
 static NapiApi g_napi;
 static bool g_napiResolved = false;
 
-static bool ResolveNapi() {
-  if (g_napiResolved) return true;
-  HMODULE host = GetModuleHandleW(nullptr);
-  if (!host) return false;
-#define X(name)                                           \
-  g_napi.name = reinterpret_cast<decltype(&name)>(         \
-      GetProcAddress(host, #name));                       \
-  if (!g_napi.name) return false;
+static bool ResolveFromModule(HMODULE mod) {
+#define X(fname)                                                        \
+  g_napi.fname = reinterpret_cast<decltype(&fname)>(                     \
+      GetProcAddress(mod, #fname));                                      \
+  if (!g_napi.fname) return false;
   NAPI_FNS
 #undef X
-  g_napiResolved = true;
   return true;
+}
+
+static bool ResolveNapi() {
+  if (g_napiResolved) return true;
+  // The NAPI functions live in the Node runtime module, which is NOT always
+  // the host exe: plain node.exe statically links them, but Electron keeps
+  // them in node.dll (some distributions: libnode.dll). Probe each candidate
+  // and use the first one that exports every function we need.
+  static const wchar_t* kCandidates[] = {
+      nullptr,          // host exe (plain node.exe, static builds)
+      L"node.dll",      // Electron on Windows
+      L"libnode.dll",   // alternative Node distributions
+  };
+  for (const wchar_t* name : kCandidates) {
+    HMODULE mod = GetModuleHandleW(name);
+    if (mod && ResolveFromModule(mod)) {
+      g_napiResolved = true;
+      return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

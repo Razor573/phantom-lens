@@ -141,34 +141,31 @@ export default function Commands({
     };
   }, []);
 
-  // Stealth typing (natively-style): while the ask input is open, prefer the
-  // native keyboard hook so the window never takes focus; fall back to the
-  // classic focus-the-window flow when the hook is unavailable. Restore
-  // stealth click-through when it closes.
+  // Stealth typing (natively-style): the ask input ONLY works through the
+  // native keyboard hook - the window never takes focus, ever. If the hook
+  // fails to start, show the error instead of falling back to focus typing.
+  // Restore stealth click-through when it closes.
   const [stealthTyping, setStealthTyping] = useState(false);
+  const [stealthError, setStealthError] = useState<string | null>(null);
 
   useEffect(() => {
     const enter = async () => {
+      setStealthError(null);
+      setStealthTyping(false);
       try {
         const res = await window.electronAPI.startStealthTyping?.();
         if (res?.success && res.data?.stealth) {
           setStealthTyping(true);
           return;
         }
-      } catch {}
-      setStealthTyping(false);
-      try {
-        await window.electronAPI.focusWindow?.();
-      } catch {}
-      try {
-        await window.electronAPI.setInteractiveMouseEvents?.();
-      } catch {}
-      try {
-        await window.electronAPI.restoreInteractiveMode?.();
-      } catch {}
+        setStealthError(res?.data?.error || res?.error || "Stealth typing failed to start.");
+      } catch (e: any) {
+        setStealthError(e?.message || "Stealth typing failed to start.");
+      }
     };
     const exit = async () => {
       setStealthTyping(false);
+      setStealthError(null);
       try {
         await window.electronAPI.stopStealthTyping?.();
       } catch {}
@@ -871,6 +868,7 @@ export default function Commands({
               onClose={() => setAskOpen(false)}
               onFollowUp={view === "response" || view === "followup"}
               stealthTyping={stealthTyping}
+              stealthError={stealthError}
             />
           </div>,
           document.body

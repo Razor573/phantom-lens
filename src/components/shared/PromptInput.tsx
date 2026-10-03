@@ -6,9 +6,11 @@ interface PromptInputProps {
   onFollowUp?: boolean;
   /** Natively-style focus-free typing: keystrokes arrive via the native hook. */
   stealthTyping?: boolean;
+  /** When the hook fails to start, this message is shown instead of any input. */
+  stealthError?: string | null;
 }
 
-export default function PromptInput({ isVisible, onClose, onFollowUp = false, stealthTyping = false }: PromptInputProps) {
+export default function PromptInput({ isVisible, onClose, onFollowUp = false, stealthTyping = false, stealthError = null }: PromptInputProps) {
   const [mode, setMode] = useState<"normal"|"stealth">("normal");
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -171,7 +173,28 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
       {/* Input Field - in stealth-typing mode this is a display fed by the
           native keyboard hook (the window never takes focus); otherwise a
           classic input. */}
-      {stealthTyping ? (
+      {stealthError ? (
+        <div
+          className="flex-1 text-sm"
+          style={{
+            background: 'rgba(220, 38, 38, 0.15)',
+            border: '1px solid rgba(220, 38, 38, 0.4)',
+            borderRadius: '20px',
+            padding: '10px 14px',
+            color: '#fca5a5',
+            fontFamily: "'Helvetica Neue', sans-serif",
+            fontWeight: '400',
+            minHeight: '38px',
+            display: 'flex',
+            alignItems: 'center',
+          }}
+          title={stealthError}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            Stealth typing failed: {stealthError} (Ctrl+K to close)
+          </span>
+        </div>
+      ) : stealthTyping ? (
         <div
           className="flex-1 text-sm"
           style={{

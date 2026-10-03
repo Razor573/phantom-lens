@@ -49,6 +49,7 @@ interface Window {
     setApiConfig: (config: {
       apiKey: string;
       model: string;
+      provider?: string;
     }) => Promise<{ success: boolean; error?: string }>;
     getApiConfig: () => Promise<{
       success: boolean;
@@ -60,6 +61,13 @@ interface Window {
       error?: string;
     }>;
     listGeminiModels: () => Promise<{
+      success: boolean;
+      data?: {
+        models: Array<{ id: string; name: string }>;
+      };
+      error?: string;
+    }>;
+    listGroqModels: () => Promise<{
       success: boolean;
       data?: {
         models: Array<{ id: string; name: string }>;
@@ -122,7 +130,7 @@ interface Window {
     // Stealth keyboard (natively-style focus-free typing)
     startStealthTyping: () => Promise<{
       success: boolean;
-      data?: { stealth: boolean };
+      data?: { stealth: boolean; error?: string };
       error?: string;
     }>;
     stopStealthTyping: () => Promise<{ success: boolean; error?: string }>;

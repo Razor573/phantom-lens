@@ -36,6 +36,7 @@ export class StealthKeyboardManager {
   private addon: StealthKeyboardAddon | null = null;
   private loadAttempted = false;
   private active = false;
+  private lastError: string | null = null;
 
   constructor(private getMainWindow: () => BrowserWindow | null) {}
 
@@ -61,11 +62,14 @@ export class StealthKeyboardManager {
     if (this.loadAttempted) return false;
     this.loadAttempted = true;
     if (process.platform !== "win32") {
+      this.lastError = "Stealth typing is only available on Windows.";
       console.log("[StealthKeyboard] Not on Windows - stealth typing unavailable");
       return false;
     }
     const addonPath = this.resolveAddonPath();
     if (!addonPath) {
+      this.lastError =
+        "Native keyboard module (stealth_keyboard.node) not found in the app bundle.";
       console.warn("[StealthKeyboard] Native module not found - stealth typing unavailable");
       return false;
     }
@@ -74,11 +78,17 @@ export class StealthKeyboardManager {
       this.addon = require(addonPath) as StealthKeyboardAddon;
       console.log("[StealthKeyboard] Native module loaded from", addonPath);
       return true;
-    } catch (error) {
+    } catch (error: any) {
+      this.lastError = `Native keyboard module failed to load: ${error?.message || String(error)}`;
       console.error("[StealthKeyboard] Failed to load native module:", error);
       this.addon = null;
       return false;
     }
+  }
+
+  /** Human-readable reason for the last start/load failure, if any. */
+  getLastError(): string | null {
+    return this.lastError;
   }
 
   /** True when the native hook is usable on this machine. */
@@ -107,10 +117,13 @@ export class StealthKeyboardManager {
       });
       if (ok) {
         this.active = true;
+        this.lastError = null;
         console.log("[StealthKeyboard] Typing session started");
         return true;
       }
+      this.lastError = "Native keyboard hook refused to start.";
     } catch (error) {
+      this.lastError = `Native keyboard hook failed: ${(error as any)?.message || String(error)}`;
       console.error("[StealthKeyboard] startTyping failed:", error);
     }
     return false;

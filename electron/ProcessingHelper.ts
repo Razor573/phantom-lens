@@ -127,6 +127,99 @@ export class ProcessingHelper {
     return null;
   }
 
+  private providerLabel(): string {
+    return (process.env.API_PROVIDER || "gemini") === "groq" ? "Groq" : "Gemini";
+  }
+
+  /**
+   * Groq chat-completions (OpenAI-compatible) streaming.
+   * Yields { text() } chunks so consumeStreamWithTimeout can be reused as-is.
+   */
+  private async *streamGroqChatCompletion(
+    signal: AbortSignal,
+    apiKey: string,
+    model: string,
+    prompt: string,
+    base64Images: string[]
+  ): AsyncGenerator<{ text: () => string }> {
+    const content: any[] = [{ type: "text", text: prompt }];
+    for (const data of base64Images) {
+      if (data && typeof data === "string" && data.length > 100) {
+        content.push({
+          type: "image_url",
+          image_url: { url: `data:image/png;base64,${data}` },
+        });
+      }
+    }
+
+    const response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content }],
+          stream: true,
+        }),
+        signal,
+      }
+    );
+
+    if (!response.ok || !response.body) {
+      let detail = "";
+      try {
+        detail = await response.text();
+      } catch {}
+      if (response.status === 400 && /image/i.test(detail)) {
+        throw new Error(
+          "Groq rejected the request (400): this model may not support images. " +
+            "Pick a vision-capable Groq model in settings. " +
+            `Details: ${detail.slice(0, 300)}`
+        );
+      }
+      throw new Error(
+        `Groq API error ${response.status}: ${detail.slice(0, 300)}`
+      );
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (signal.aborted) throw new Error("Request aborted");
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === "[DONE]") return;
+          try {
+            const json = JSON.parse(payload);
+            const delta = json?.choices?.[0]?.delta?.content;
+            if (typeof delta === "string" && delta.length > 0) {
+              yield { text: () => delta };
+            }
+          } catch {
+            // ignore partial JSON fragments
+          }
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+  }
+
   public async processScreenshots(): Promise<void> {
     if (this.isCurrentlyProcessing) {
       console.log("Processing already in progress. Skipping duplicate call.");
@@ -400,7 +493,7 @@ export class ProcessingHelper {
           if (responseResult.success) {
             this.screenshotHelper.clearExtraScreenshotQueue();
             // Store the response for follow-up context
-            this.previousResponse = responseResult.data;
+            this.previousResponse = responseResult.data ?? null;
             mainWindow.webContents.send(
               this.deps.PROCESSING_EVENTS.RESPONSE_SUCCESS,
               { response: responseResult.data }
@@ -531,6 +624,48 @@ export class ProcessingHelper {
 
       const mainWindow = this.deps.getMainWindow();
 
+      // Groq (OpenAI-compatible) path - same prompt, streamed via SSE.
+      if ((process.env.API_PROVIDER || "gemini") === "groq") {
+        try {
+          accumulatedText = "";
+          await this.consumeStreamWithTimeout(
+            this.streamGroqChatCompletion(signal, apiKey, model, prompt, base64Images),
+            (chunkText) => {
+              accumulatedText += chunkText;
+
+              // Send chunk to UI for live markdown rendering
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                chunksSent = true; // Mark that we've sent at least one chunk
+                mainWindow.webContents.send(
+                  this.deps.PROCESSING_EVENTS.RESPONSE_CHUNK,
+                  { response: accumulatedText }
+                );
+              }
+            },
+            signal
+          );
+
+          responseText = accumulatedText;
+
+          // Send final success message
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              const main = require("./main");
+              main.saveResponseToHistory?.(responseText);
+            } catch {}
+            mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.RESPONSE_SUCCESS, { response: responseText });
+          }
+
+          return { success: true, data: responseText };
+        } finally {
+          try {
+            signal.removeEventListener("abort", abortHandler);
+          } catch (e) {
+            // Ignore if removeEventListener fails - signal may already be cleaned up
+          }
+        }
+      }
+
       try {
         // Stream the response with controlled pace
         const result = await geminiModel.generateContentStream([
@@ -611,7 +746,7 @@ export class ProcessingHelper {
       if (modelFailure) {
         const friendly =
           modelFailure === "rate_limited"
-            ? "429: Gemini rate limit reached - too many requests right now. Wait a few seconds and try again, or switch to a different model in settings."
+            ? `${this.providerLabel()} rate limit reached (429) - too many requests right now. Wait a few seconds and try again, or switch to a different model in settings.`
             : modelFailure === "overloaded"
               ? "The selected model is overloaded right now. Try again in a bit, or switch to a different model in settings."
               : "The request timed out waiting for the model. Please try again.";
@@ -814,6 +949,47 @@ export class ProcessingHelper {
 
       let followUpResponse = "";
 
+      // Groq (OpenAI-compatible) path - same prompt, streamed via SSE.
+      if ((process.env.API_PROVIDER || "gemini") === "groq") {
+        try {
+          let accumulatedText = "";
+          await this.consumeStreamWithTimeout(
+            this.streamGroqChatCompletion(signal, apiKey, model, prompt, validBase64Images),
+            (chunkText) => {
+              accumulatedText += chunkText;
+
+              // Send chunk to UI for live markdown rendering
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  this.deps.PROCESSING_EVENTS.FOLLOW_UP_CHUNK,
+                  { response: accumulatedText }
+                );
+              }
+            },
+            signal
+          );
+
+          followUpResponse = accumulatedText;
+
+          // Send final success message
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              const main = require("./main");
+              main.saveResponseToHistory?.(followUpResponse);
+            } catch {}
+            mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.FOLLOW_UP_SUCCESS, { response: followUpResponse });
+          }
+        } finally {
+          try {
+            signal.removeEventListener("abort", abortHandler);
+          } catch (e) {
+            // Ignore if removeEventListener fails - signal may already be cleaned up
+          }
+        }
+
+        return { success: true, data: followUpResponse };
+      }
+
       try {
         // Stream the follow-up response with controlled pace
         const result = await geminiModel.generateContentStream([
@@ -876,7 +1052,7 @@ export class ProcessingHelper {
       if (modelFailure) {
         const friendly =
           modelFailure === "rate_limited"
-            ? "429: Gemini rate limit reached - too many requests right now. Wait a few seconds and try again, or switch to a different model in settings."
+            ? `${this.providerLabel()} rate limit reached (429) - too many requests right now. Wait a few seconds and try again, or switch to a different model in settings.`
             : modelFailure === "overloaded"
               ? "The selected model is overloaded right now. Try again in a bit, or switch to a different model in settings."
               : "The request timed out waiting for the model. Please try again.";
