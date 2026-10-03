@@ -543,11 +543,53 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     return { top, left };
   };
 
-  // FIXED: Measure the real content height and size the tooltip to fit it
-  // (capped to a fraction of the screen), instead of a fixed 420px box that
-  // always needed internal scrolling. Single measurement after the enter
-  // animation settles, plus one self-healing re-check in case the
-  // main-process rate limiter dropped the first update.
+  // Measure the real content height and size the tooltip + window to fit
+  // it (capped to a fraction of the screen). While open, the panel only ever
+  // grows - async content (update banner, model list) triggers a re-fit via
+  // the ResizeObserver below instead of a single one-shot measurement.
+  const lastContentHeightRef = useRef(0);
+  const fitPanelToContent = useCallback(() => {
+    if (!tooltipRef.current || !isVisibleRef.current) return TOOLTIP_HEIGHT;
+    const content = contentRef.current;
+    if (!content) return TOOLTIP_HEIGHT;
+    const contentHeight = content.scrollHeight;
+    // Only re-fit when content actually grew (avoids measure loops).
+    if (contentHeight <= lastContentHeightRef.current + 20) {
+      return Math.max(TOOLTIP_HEIGHT, Math.min(contentHeight + 100, Math.floor(window.screen.availHeight * 0.72)));
+    }
+    lastContentHeightRef.current = contentHeight;
+
+    // Full content height + room for padding; cap at 72% of the available
+    // screen height so the window stays on screen.
+    const maxPanel = Math.floor(window.screen.availHeight * 0.72);
+    const panelHeight = Math.max(
+      TOOLTIP_HEIGHT,
+      Math.min(contentHeight + 100, maxPanel)
+    );
+    setTooltipHeight((prev) => Math.max(prev, panelHeight));
+
+    // Grow the window to fit the panel at its position.
+    const position = getTooltipPosition();
+    const requiredHeight = Math.max(position.top + panelHeight + 60, BASE_WINDOW_HEIGHT);
+    if (requiredHeight > requiredHeightRef.current) {
+      requiredHeightRef.current = requiredHeight;
+      console.log('Tooltip height calculation:', {
+        contentScrollHeight: contentHeight,
+        panelHeight,
+        tooltipTop: position.top,
+        requiredHeight,
+        currentWindowHeight: window.innerHeight
+      });
+      window.electronAPI.updateContentDimensions({
+        width: 'fixed',
+        height: requiredHeight
+      }).catch(error => {
+        console.error('Failed to expand window:', error);
+      });
+    }
+    return panelHeight;
+  }, []);
+
   useEffect(() => {
     if (onVisibilityChange) {
       // Use setTimeout to ensure tooltip is fully rendered before measuring
@@ -555,44 +597,15 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       const timeout = setTimeout(() => {
         let height = 0;
         if (tooltipRef.current && isVisible) {
-          let panelHeight = TOOLTIP_HEIGHT;
-          const content = contentRef.current;
-          if (content) {
-            // Full content height + room for padding; cap at 72% of the
-            // available screen height so the window stays on screen.
-            const maxPanel = Math.floor(window.screen.availHeight * 0.72);
-            panelHeight = Math.max(
-              TOOLTIP_HEIGHT,
-              Math.min(content.scrollHeight + 100, maxPanel)
-            );
-          }
-          setTooltipHeight(panelHeight);
-          height = panelHeight;
-
-          // Also update window dimensions when tooltip is visible
-          const position = getTooltipPosition();
-          // Generous bottom padding so the tooltip never clips
-          const requiredHeight = Math.max(position.top + panelHeight + 60, BASE_WINDOW_HEIGHT);
-          requiredHeightRef.current = requiredHeight;
-
-          console.log('Tooltip height calculation:', {
-            contentScrollHeight: content?.scrollHeight,
-            panelHeight,
-            tooltipTop: position.top,
-            requiredHeight,
-            currentWindowHeight: window.innerHeight
-          });
-
-          window.electronAPI.updateContentDimensions({
-            width: 'fixed',
-            height: requiredHeight
-          }).catch(error => {
-            console.error('Failed to expand window:', error);
-          });
+          lastContentHeightRef.current = 0; // fresh measurement on open
+          height = fitPanelToContent();
+          onVisibilityChange(isVisible, height);
 
           // Self-healing: if the window didn't grow (blocked/dropped update),
-          // try once more after things settle.
+          // re-measure and try once more after things settle.
           verifyTimer = setTimeout(() => {
+            lastContentHeightRef.current = 0;
+            fitPanelToContent();
             if (requiredHeightRef.current > 0 && window.innerHeight < requiredHeightRef.current - 20) {
               console.log('Tooltip window still too short, re-applying height:', requiredHeightRef.current);
               window.electronAPI.updateContentDimensions({
@@ -607,13 +620,13 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           // When closing, reset to base height
           setTooltipHeight(TOOLTIP_HEIGHT);
           requiredHeightRef.current = 0;
+          lastContentHeightRef.current = 0;
           window.electronAPI.updateContentDimensions({
             width: 'fixed',
             height: BASE_WINDOW_HEIGHT
           });
+          onVisibilityChange(isVisible, height);
         }
-
-        onVisibilityChange(isVisible, height);
       }, isVisible ? 250 : 0); // Wait for the 200ms enter animation before measuring
 
       return () => {
@@ -621,7 +634,23 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (verifyTimer) clearTimeout(verifyTimer);
       };
     }
-  }, [isVisible, onVisibilityChange]);
+  }, [isVisible, onVisibilityChange, fitPanelToContent, tooltipHeight]);
+
+  // Re-fit the panel whenever the settings content itself changes size
+  // (model list refresh, update banner, provider switch).
+  useEffect(() => {
+    if (!isVisible || !contentRef.current || typeof ResizeObserver === 'undefined') return;
+    let debounce: ReturnType<typeof setTimeout> | undefined;
+    const observer = new ResizeObserver(() => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => fitPanelToContent(), 150);
+    });
+    observer.observe(contentRef.current);
+    return () => {
+      if (debounce) clearTimeout(debounce);
+      observer.disconnect();
+    };
+  }, [isVisible, fitPanelToContent]);
 
   const handleTooltipVisibilityChange = (visible: boolean) => {
     // This function is kept for backward compatibility but the actual height calculation

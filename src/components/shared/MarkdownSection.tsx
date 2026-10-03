@@ -87,6 +87,14 @@ export const MarkdownSection = ({
               li: ({ node, ...props }) => (
                 <li className="mb-2 text-sm text-white/80" {...props} />
               ),
+              img: ({ node, ...props }) => (
+                // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text
+                <img
+                  className="max-w-full h-auto rounded-lg my-2"
+                  style={{ maxWidth: '100%' }}
+                  {...props}
+                />
+              ),
               table: ({ node, ...props }) => (
                 <div className="overflow-x-auto my-4">
                   <table 
@@ -129,7 +137,7 @@ export const MarkdownSection = ({
                   className={`overflow-x-hidden rounded-lg text-white/90 text-sm whitespace-pre-wrap break-words p-4 code-block-scroll mb-4 max-w-full ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
                   style={{
                     ...(isTransparent ? { background: 'transparent', border: 'none' } : {}),
-                    overflowWrap: 'break-word',
+                    overflowWrap: 'anywhere',
                     wordBreak: 'break-word',
                   }}
                   {...props}
@@ -148,7 +156,7 @@ export const MarkdownSection = ({
                       background: "transparent",
                       whiteSpace: "pre-wrap",
                       wordBreak: "break-word",
-                      overflowWrap: "break-word",
+                      overflowWrap: "anywhere",
                       maxWidth: "100%",
                     }}
                     PreTag="div"

@@ -187,10 +187,11 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
             minHeight: '38px',
             display: 'flex',
             alignItems: 'center',
+            maxWidth: '100%',
           }}
           title={stealthError}
         >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span style={{ overflowWrap: 'break-word', wordBreak: 'break-word', whiteSpace: 'normal' }}>
             Stealth typing failed: {stealthError} (Ctrl+K to close)
           </span>
         </div>

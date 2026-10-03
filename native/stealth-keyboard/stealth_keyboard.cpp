@@ -115,10 +115,19 @@ static std::mutex g_swallowedMutex;
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Cached CapsLock toggle, seeded on the calling (JS) thread at session start -
+// the hook worker thread cannot read toggle state reliably (mirrors natively).
+static std::atomic<bool> g_capsLock{false};
+
 // Translate a virtual key to UTF-8 text using the foreground layout.
+// Keyboard state is built from GetAsyncKeyState (reliable from any thread)
+// instead of GetKeyboardState (unreliable on the hook worker thread).
 static std::string VkToUtf8(DWORD vk, DWORD scanCode) {
   BYTE kbState[256] = {0};
-  if (!GetKeyboardState(kbState)) return "";
+  if (GetAsyncKeyState(VK_SHIFT) & 0x8000) kbState[VK_SHIFT] = 0x80;
+  if (GetAsyncKeyState(VK_CONTROL) & 0x8000) kbState[VK_CONTROL] = 0x80;
+  if (GetAsyncKeyState(VK_MENU) & 0x8000) kbState[VK_MENU] = 0x80;
+  if (g_capsLock.load()) kbState[VK_CAPITAL] = 0x01;
 
   HWND fg = GetForegroundWindow();
   HKL layout = GetKeyboardLayout(fg ? GetWindowThreadProcessId(fg, nullptr) : 0);
@@ -163,10 +172,10 @@ static void EmitKey(KeyEvent ev) {
   if (st != napi_ok) delete heapEv;
 }
 
-static bool ModifiersHeld() {
-  return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0 ||
-         (GetAsyncKeyState(VK_MENU) & 0x8000) != 0 ||
-         (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
+static bool CtrlHeld()  { return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0; }
+static bool AltHeld()   { return (GetAsyncKeyState(VK_MENU) & 0x8000) != 0; }
+static bool WinHeld()   {
+  return (GetAsyncKeyState(VK_LWIN) & 0x8000) != 0 ||
          (GetAsyncKeyState(VK_RWIN) & 0x8000) != 0;
 }
 
@@ -180,23 +189,39 @@ static LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lP
     const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
     const DWORD vk = k->vkCode;
 
+    // Track CapsLock toggles (the worker thread can't query them reliably).
+    if (vk == VK_CAPITAL && isDown) {
+      g_capsLock.store(!g_capsLock.load());
+    }
+
     if (isDown) {
       bool swallow = false;
       KeyEvent ev;
 
-      if (ModifiersHeld()) {
-        // Ctrl/Alt/Win chord: NEVER swallow. The user must always be able
-        // to Alt+Tab away, and our own global shortcuts must keep working.
+      const bool ctrl = CtrlHeld();
+      const bool alt = AltHeld();
+      // AltGr shows up as Ctrl+Alt on EU layouts and produces REAL text
+      // (@ { } \ € …). It must be captured, not passed through - otherwise
+      // those characters leak into the foreground app (mirrors natively).
+      const bool altgr = ctrl && alt;
+
+      if (WinHeld()) {
+        // Win chord: NEVER swallow. The user must always be able to
+        // Alt+Tab away.
         swallow = false;
-      } else if (vk == VK_BACK) {
+      } else if ((ctrl || alt) && !altgr) {
+        // Plain Ctrl/Alt chord: NEVER swallow. Our own global shortcuts
+        // (Ctrl+K, Ctrl+Enter, ...) must keep working.
+        swallow = false;
+      } else if (vk == VK_BACK && !altgr) {
         ev.kind = "backspace"; swallow = true;
-      } else if (vk == VK_RETURN) {
+      } else if (vk == VK_RETURN && !altgr) {
         ev.kind = "enter"; swallow = true;
-      } else if (vk == VK_ESCAPE) {
+      } else if (vk == VK_ESCAPE && !altgr) {
         ev.kind = "escape"; swallow = true;
-      } else if (vk == VK_SPACE) {
+      } else if (vk == VK_SPACE && !altgr) {
         ev.kind = "char"; ev.ch = " "; swallow = true;
-      } else if (vk == VK_TAB) {
+      } else if (vk == VK_TAB && !altgr) {
         ev.kind = "char"; ev.ch = "\t"; swallow = true;
       } else if ((vk >= 0x30 && vk <= 0x5A) ||       // 0-9, A-Z
                  (vk >= VK_OEM_1 && vk <= VK_OEM_8) || // punctuation block
@@ -272,11 +297,13 @@ static napi_value StartTyping(napi_env env, napi_callback_info info) {
   std::lock_guard<std::mutex> lock(g_stateMutex);
 
   if (!g_tsfn) {
-    napi_value name, undef;
+    napi_value name;
     g_napi.napi_create_string_utf8(env, "stealth-keys", NAPI_AUTO_LENGTH, &name);
-    g_napi.napi_get_undefined(env, &undef);
+    // NOTE: async_resource must be C++ nullptr (Node then creates a default
+    // object). Passing a JS undefined *value* fails CHECK_TO_OBJECT inside
+    // napi_create_threadsafe_function and the call returns napi_invalid_arg.
     napi_status st = g_napi.napi_create_threadsafe_function(
-        env, argv[0], undef, name,
+        env, argv[0], nullptr, name,
         0,            // max_queue_size: unlimited
         1,            // initial_thread_count
         nullptr,      // thread_finalize_data
@@ -302,6 +329,10 @@ static napi_value StartTyping(napi_env env, napi_callback_info info) {
       return nullptr;
     }
   }
+
+  // Seed CapsLock toggle state here on the JS thread (reliable), the hook
+  // worker thread keeps it current from VK_CAPITAL key-downs afterwards.
+  g_capsLock.store((GetKeyState(VK_CAPITAL) & 0x0001) != 0);
 
   g_typing.store(true);
   napi_value result;
