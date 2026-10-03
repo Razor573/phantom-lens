@@ -58,7 +58,10 @@ export const MarkdownSection = ({
           <ThinkingIndicator size="lg" />
         </div>
       ) : content ? (
-        <div className="w-full text-sm">
+        <div
+          className="w-full max-w-full text-sm break-words"
+          style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}
+        >
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             rehypePlugins={[rehypeRaw]}
@@ -123,8 +126,12 @@ export const MarkdownSection = ({
               ),
               pre: ({ node, ...props }) => (
                 <pre
-                  className={`overflow-x-auto rounded-lg text-white/90 text-sm whitespace-pre p-4 code-block-scroll mb-4 ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
-                  style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                  className={`overflow-x-auto rounded-lg text-white/90 text-sm whitespace-pre-wrap break-words p-4 code-block-scroll mb-4 max-w-full ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
+                  style={{
+                    ...(isTransparent ? { background: 'transparent', border: 'none' } : {}),
+                    overflowWrap: 'break-word',
+                    wordBreak: 'break-word',
+                  }}
                   {...props}
                 />
               ),
@@ -139,6 +146,10 @@ export const MarkdownSection = ({
                       padding: 0,
                       paddingBottom: "8px",
                       background: "transparent",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      overflowWrap: "break-word",
+                      maxWidth: "100%",
                     }}
                     PreTag="div"
                     language={match[1]}
@@ -148,8 +159,11 @@ export const MarkdownSection = ({
                   </SyntaxHighlighter>
                 ) : (
                   <code 
-                    className={`font-mono text-sm px-2 py-1 rounded text-white/90 ${isTransparent ? '' : 'bg-white/10'}`}
-                    style={isTransparent ? { background: 'transparent' } : {}}
+                    className={`font-mono text-sm px-2 py-1 rounded text-white/90 break-words ${isTransparent ? '' : 'bg-white/10'}`}
+                    style={{
+                      ...(isTransparent ? { background: 'transparent' } : {}),
+                      overflowWrap: 'break-word',
+                    }}
                     {...props}
                   >
                     {children}

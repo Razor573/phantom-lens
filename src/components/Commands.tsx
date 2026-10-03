@@ -168,9 +168,16 @@ export default function Commands({
   }, [askOpen]);
 
   // Grow the window when the attached-files strip appears so it never clips,
-  // and restore the base height when it goes away.
+  // and restore the base height when it goes away. Skips entirely when
+  // nothing is attached so stray updates don't race the settings tooltip's
+  // own height updates through the main-process rate limiter.
   const chipsRef = useRef<HTMLDivElement>(null);
+  const prevFileCountRef = useRef(0);
   useEffect(() => {
+    const count = attachedFiles.length;
+    const prev = prevFileCountRef.current;
+    prevFileCountRef.current = count;
+    if (count === 0 && prev === 0 && !attachError) return;
     const t = setTimeout(() => {
       const extra = chipsRef.current ? chipsRef.current.offsetHeight : 0;
       const base = view === "initial" ? 260 : view === "followup" ? 700 : 660;
@@ -180,6 +187,59 @@ export default function Commands({
     }, 260);
     return () => clearTimeout(t);
   }, [attachedFiles.length, attachError, view]);
+
+  // Settings open/close logging - memoized so the Tooltip's height effect
+  // doesn't re-fire on every Commands render.
+  const handleSettingsVisibilityChange = useCallback(
+    (visible: boolean, height: number) => {
+      if (visible && height > 0) {
+        console.log("[Commands] Settings opened, height:", height);
+      } else {
+        console.log("[Commands] Settings closed");
+      }
+    },
+    []
+  );
+
+  // Attached-file chips (shared between the command-bar strip and the ask
+  // overlay, where mouse clicks work because interactive mode is on).
+  const renderFileChips = () => (
+    <>
+      <Paperclip
+        className="h-3 w-3 text-white/50 flex-shrink-0"
+        style={{ opacity: isTransparent ? 0.4 : 1 }}
+      />
+      {attachedFiles.map((file) => (
+        <div
+          key={file.id}
+          className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-white/80"
+          style={{
+            background: isTransparent
+              ? "transparent"
+              : "rgba(255, 255, 255, 0.08)",
+            border: isTransparent
+              ? "none"
+              : "1px solid rgba(255, 255, 255, 0.15)",
+            fontFamily:
+              "'Helvetica Neue', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+          }}
+          title={`${file.name} (${Math.round(file.charCount / 1000)}k chars${file.truncated ? ", truncated" : ""})`}
+        >
+          <span className="max-w-[140px] truncate">{file.name}</span>
+          <button
+            onClick={() => removeAttachedFile(file.id)}
+            className="flex items-center justify-center w-3.5 h-3.5 rounded-full text-white/50 hover:text-white hover:bg-white/15 transition-colors"
+            title="Remove file"
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        </div>
+      ))}
+      {attachError && (
+        <span className="text-[11px] text-red-300/90">{attachError}</span>
+      )}
+    </>
+  );
 
   // Check for updates - only set if update is available, never clear it
   const checkForUpdate = useCallback(async () => {
@@ -657,18 +717,7 @@ export default function Commands({
                   }}
                 />
               }
-              onVisibilityChange={(visible, height) => {
-                // Handle window dimension updates when settings opens/closes
-                // The Tooltip component already handles this internally, but we need to provide
-                // the callback so it can update the window dimensions properly
-                if (visible && height > 0) {
-                  // Tooltip will handle the window expansion internally
-                  console.log('[Commands] Settings opened, height:', height);
-                } else {
-                  // Tooltip will handle the window reset internally
-                  console.log('[Commands] Settings closed');
-                }
-              }}
+              onVisibilityChange={handleSettingsVisibilityChange}
             />
           </div>
         </div>
@@ -685,39 +734,7 @@ export default function Commands({
               className="flex items-center gap-1.5 px-3 pt-1.5 flex-wrap"
               style={{ pointerEvents: "auto" }}
             >
-              <Paperclip
-                className="h-3 w-3 text-white/50 flex-shrink-0"
-                style={{ opacity: isTransparent ? 0.4 : 1 }}
-              />
-              {attachedFiles.map((file) => (
-                <div
-                  key={file.id}
-                  className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] text-white/80"
-                  style={{
-                    background: isTransparent
-                      ? "transparent"
-                      : "rgba(255, 255, 255, 0.08)",
-                    border: isTransparent
-                      ? "none"
-                      : "1px solid rgba(255, 255, 255, 0.15)",
-                    fontFamily:
-                      "'Helvetica Neue', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
-                  }}
-                  title={`${file.name} (${Math.round(file.charCount / 1000)}k chars${file.truncated ? ", truncated" : ""})`}
-                >
-                  <span className="max-w-[140px] truncate">{file.name}</span>
-                  <button
-                    onClick={() => removeAttachedFile(file.id)}
-                    className="flex items-center justify-center w-3.5 h-3.5 rounded-full text-white/50 hover:text-white hover:bg-white/15 transition-colors"
-                    title="Remove file"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </div>
-              ))}
-              {attachError && (
-                <span className="text-[11px] text-red-300/90">{attachError}</span>
-              )}
+              {renderFileChips()}
             </motion.div>
           )}
         </AnimatePresence>
@@ -823,6 +840,16 @@ export default function Commands({
               pointerEvents: "auto",
             }}
           >
+            {/* Attached files with working remove buttons (mouse works here
+                because the ask input enables interactive mode) */}
+            {(attachedFiles.length > 0 || attachError) && (
+              <div
+                className="flex items-center gap-1.5 flex-wrap mb-2 px-1"
+                style={{ maxWidth: 520 }}
+              >
+                {renderFileChips()}
+              </div>
+            )}
             <PromptInput
               isVisible={askOpen}
               onClose={() => setAskOpen(false)}

@@ -77,6 +77,23 @@ export default function Response({ setView }: ResponseProps) {
   const isStreamingRef = useRef(false);
   const streamedResponseRef = useRef("");
 
+  // Scroll velocity tracker: holding Alt+Arrow ramps the scroll speed up
+  // while key-repeat events keep arriving, capped at a max multiplier.
+  const scrollVelocityRef = useRef({ last: 0, mult: 1 });
+  const rampedScroll = useCallback((el: HTMLElement, dx: number, dy: number) => {
+    const now = performance.now();
+    const v = scrollVelocityRef.current;
+    if (now - v.last < 160) {
+      // Key still held (auto-repeat): accelerate, up to the cap
+      v.mult = Math.min(v.mult * 1.4, 8);
+    } else {
+      // Fresh press: start slow
+      v.mult = 1;
+    }
+    v.last = now;
+    el.scrollBy({ left: dx * v.mult, top: dy * v.mult, behavior: "auto" });
+  }, []);
+
   // Update refs when state changes
   useEffect(() => {
     isStreamingRef.current = isStreaming;
@@ -226,7 +243,7 @@ export default function Response({ setView }: ResponseProps) {
       window.electronAPI.onResponseScroll(({ delta }) => {
         try {
           const container = document.getElementById('responseContainer');
-          if (container) container.scrollBy({ top: delta, behavior: 'smooth' });
+          if (container) rampedScroll(container, 0, delta);
         } catch {}
       }),
       window.electronAPI.onCodeBlockScroll(({ delta }) => {
@@ -294,7 +311,7 @@ export default function Response({ setView }: ResponseProps) {
             
             // Only scroll if there's room to scroll
             if ((delta < 0 && currentScroll > 0) || (delta > 0 && currentScroll < maxScroll)) {
-              element.scrollBy({ left: delta, behavior: 'smooth' });
+              rampedScroll(element, delta, 0);
             }
           }
         } catch (error) {
@@ -489,11 +506,13 @@ export default function Response({ setView }: ResponseProps) {
             {/* Response Container */}
             <div 
               id="responseContainer" 
-              className="overflow-y-auto text-sm leading-relaxed max-h-96 select-text"
+              className="overflow-y-auto overflow-x-hidden text-sm leading-relaxed max-h-96 select-text"
               style={{ 
                 background: 'transparent',
                 padding: '16px 16px 16px 48px',
-                color: 'white'
+                color: 'white',
+                overflowWrap: 'break-word',
+                wordBreak: 'break-word',
               }}>
               
               {isLoading ? (

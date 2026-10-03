@@ -419,6 +419,7 @@ export interface IShortcutsHelperDeps {
   scrollCodeBlockBy: (delta: number) => void;
   getUserPromptValue: () => string | null;
   openAttachFileDialog: () => Promise<AttachedFileMeta[]>;
+  removeLastAttachedFile: () => void;
 }
 
 export interface initializeIpcHandlerDeps {
@@ -1059,6 +1060,7 @@ function initializeHelpers() {
     scrollCodeBlockBy,
     getUserPromptValue: () => state.currentPrompt,
     openAttachFileDialog,
+    removeLastAttachedFile,
   } as unknown as IShortcutsHelperDeps);
 }
 
@@ -1552,6 +1554,13 @@ export async function openAttachFileDialog(): Promise<AttachedFileMeta[]> {
 
 export function removeAttachedFile(id: string): AttachedFileMeta[] {
   state.attachedFiles = state.attachedFiles.filter((f) => f.id !== id);
+  notifyAttachedFilesChanged();
+  return getAttachedFilesMeta();
+}
+
+/** Remove the most recently attached file (keyboard-accessible removal). */
+export function removeLastAttachedFile(): AttachedFileMeta[] {
+  state.attachedFiles.pop();
   notifyAttachedFilesChanged();
   return getAttachedFilesMeta();
 }

@@ -210,11 +210,13 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       setIsVisible(prevVisible => {
         const newVisible = !prevVisible;
         deactivateInteractiveMode();
-        
-        // Use setTimeout to ensure state update happens and tooltip is rendered before calculating height
-        setTimeout(() => {
-          if (!newVisible) {
-            // Closing settings
+
+        // On close, shrink the window back after the exit animation.
+        // On open, the isVisible effect below takes a single measurement
+        // once the tooltip has settled (avoids racing duplicate updates
+        // through the main-process dimension rate limiter).
+        if (!newVisible) {
+          setTimeout(() => {
             if (onVisibilityChange) {
               window.electronAPI.updateContentDimensions({
                 width: 'fixed',
@@ -222,40 +224,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
               });
               onVisibilityChange(false, 0);
             }
-          } else {
-            // Opening settings - calculate actual height from rendered tooltip
-            // Use longer timeout to ensure all content (including update banner) is rendered
-            setTimeout(() => {
-              if (onVisibilityChange && tooltipRef.current) {
-                // Use actual measured height with more padding
-                const measuredHeight = Math.max(
-                  tooltipRef.current.offsetHeight,
-                  tooltipRef.current.scrollHeight
-                );
-                const actualHeight = measuredHeight + 30; // Increased padding
-                const position = getTooltipPosition();
-                // Calculate required window height with more bottom padding
-                const requiredHeight = Math.max(position.top + actualHeight + 40, BASE_WINDOW_HEIGHT);
-                
-                console.log('Settings opening - height calculation:', {
-                  offsetHeight: tooltipRef.current.offsetHeight,
-                  scrollHeight: tooltipRef.current.scrollHeight,
-                  measuredHeight,
-                  actualHeight,
-                  tooltipTop: position.top,
-                  requiredHeight
-                });
-                
-                window.electronAPI.updateContentDimensions({ 
-                  width: 'fixed',
-                  height: requiredHeight 
-                });
-                onVisibilityChange(true, actualHeight);
-              }
-            }, 150); // Increased delay to ensure tooltip is fully rendered
-          }
-        }, 50); // Initial delay to ensure state update
-        
+          }, 50);
+        }
+
         return newVisible;
       });
     });
@@ -501,7 +472,10 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     return { top, left };
   };
 
-  // FIXED: Use actual measured height like og version - this prevents cropping
+  // FIXED: Use actual measured height like og version - this prevents cropping.
+  // Single measurement after the enter animation settles; duplicate rapid
+  // updates used to race each other through the main-process rate limiter
+  // and the losing (wrong-sized) one could stick, clipping the bottom.
   useEffect(() => {
     if (onVisibilityChange) {
       // Use setTimeout to ensure tooltip is fully rendered before measuring
@@ -514,8 +488,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           
           // Also update window dimensions when tooltip is visible
           const position = getTooltipPosition();
-          // Increased bottom padding from 20 to 40 to ensure no cropping
-          const requiredHeight = Math.max(position.top + height + 40, BASE_WINDOW_HEIGHT);
+          // Generous bottom padding so the tooltip never clips
+          const requiredHeight = Math.max(position.top + height + 60, BASE_WINDOW_HEIGHT);
           
           console.log('Tooltip height calculation:', {
             offsetHeight: tooltipRef.current.offsetHeight,
@@ -527,7 +501,6 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
             currentWindowHeight: window.innerHeight
           });
           
-          // Always expand to ensure full visibility (removed the conditional check)
           window.electronAPI.updateContentDimensions({ 
             width: 'fixed',
             height: requiredHeight 
@@ -543,7 +516,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         }
         
         onVisibilityChange(isVisible, height);
-      }, isVisible ? 150 : 0); // Increased timeout from 100 to 150ms to ensure all content renders
+      }, isVisible ? 250 : 0); // Wait for the 200ms enter animation before measuring
       
       return () => clearTimeout(timeout);
     }
@@ -902,6 +875,13 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                     className={`px-2 py-1 rounded-md text-white/90 font-mono text-xs ${isTransparent ? '' : 'bg-white/20 border border-white/30'}`}
                     style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                   >Ctrl + O</kbd>
+                </div>
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-white/80">Remove Last Attached File</span>
+                  <kbd 
+                    className={`px-2 py-1 rounded-md text-white/90 font-mono text-xs ${isTransparent ? '' : 'bg-white/20 border border-white/30'}`}
+                    style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                  >Ctrl + Shift + O</kbd>
                 </div>
                 <div className="flex justify-between items-center py-1">
                   <span className="text-white/80">Type a Question</span>

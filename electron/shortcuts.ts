@@ -138,6 +138,15 @@ export class ShortcutsHelper {
           console.error("Failed to attach files:", error);
         }
       },
+      // Remove the most recently attached file
+      "CommandOrControl+Shift+O": () => {
+        console.log("Command/Ctrl + Shift + O pressed. Removing last attached file...");
+        try {
+          this.deps.removeLastAttachedFile();
+        } catch (error) {
+          console.error("Failed to remove attached file:", error);
+        }
+      },
       // Toggle the "type a question" input
       "CommandOrControl+K": () => {
         console.log("Command/Ctrl + K pressed. Toggling ask input...");
