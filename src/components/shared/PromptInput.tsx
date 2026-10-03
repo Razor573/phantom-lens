@@ -14,6 +14,7 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
   const [mode, setMode] = useState<"normal"|"stealth">("normal");
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const stealthDisplayRef = useRef<HTMLDivElement>(null);
   // Mirrors of latest state for the native-hook callbacks (no stale closures).
   const valueRef = useRef("");
   const submitRef = useRef(() => {});
@@ -71,6 +72,13 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
     });
     return () => { unsub?.(); };
   }, [stealthTyping, isVisible, onClose]);
+
+  // Stealth display: keep the caret visible by scrolling to the end
+  // whenever the text changes (mimics a real input's behaviour).
+  useEffect(() => {
+    const el = stealthDisplayRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [value, stealthTyping, isVisible]);
 
   const doSubmit = async () => {
     const text = valueRef.current.trim();
@@ -197,7 +205,8 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
         </div>
       ) : stealthTyping ? (
         <div
-          className="flex-1 text-sm"
+          ref={stealthDisplayRef}
+          className="flex-1 text-sm stealth-display-scroll"
           style={{
             background: 'rgba(0, 0, 0, 0.2)',
             borderRadius: '20px',
@@ -208,11 +217,14 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
             minHeight: '38px',
             display: 'flex',
             alignItems: 'center',
-            overflow: 'hidden',
+            overflowX: 'auto',
+            overflowY: 'hidden',
             whiteSpace: 'nowrap',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
           }}
         >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span style={{ flexShrink: 0 }}>
             {value || (onFollowUp ? "Type a follow-up question (or press Enter to send without text)" : "Type a prompt and press Enter")}
           </span>
           <span
@@ -326,6 +338,9 @@ export default function PromptInput({ isVisible, onClose, onFollowUp = false, st
         @keyframes stealth-caret-blink {
           0%, 100% { opacity: 1; }
           50% { opacity: 0; }
+        }
+        .stealth-display-scroll::-webkit-scrollbar {
+          display: none;
         }
       `}</style>
     </form>
