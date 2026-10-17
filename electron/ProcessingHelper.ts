@@ -143,7 +143,7 @@ export class ProcessingHelper {
       `- Break the answer into short paragraphs separated by blank lines. Never emit one long unbroken block of text.`,
       `- Use bullet or numbered lists for steps, options, or multiple points.`,
       `- Keep lines reasonably short so the text fits a narrow window without any horizontal scrolling.`,
-      `- MATH FORMATTING: use LaTeX ($...$ for inline, $$...$$ for display) ONLY for real equations and formulas. Write plain numbers, units, percentages, and option labels as normal text - never wrap them in dollar signs (write $18,000 not $$18,000$$, 52ms not $52\\text{ms}$, 3.0% not $3.0\\%$).`
+      `- MATH FORMATTING: write ALL math as plain Unicode text - use × ÷ → ⟹ ≤ ≥ ² ₀ ≠ ± − directly from the keyboard. NEVER type LaTeX backslash commands like \\times \\frac \\text \\sqrt \\% outside of $...$ delimiters. NEVER wrap plain values in dollar signs: write $18,000 and 52ms and 3.0% as plain text, never $$18,000$$ or $52\\text{ms}$ or $3.0\\%$. Only use $...$ for genuinely complex multi-step equations, and keep those simple too.`
     );
   }
 
