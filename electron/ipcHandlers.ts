@@ -62,12 +62,24 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // ============================================================================
   // API Configuration Handlers
   // ============================================================================
-  ipcMain.handle("get-api-config", createSafeIpcHandler(async () => {
+  ipcMain.handle("get-api-config", createSafeIpcHandler<[], {
+    apiKey: string; model: string; provider: string;
+    subscriptionStatus?: { signedIn: boolean; inProgress: boolean; expiresAt?: number; projectId?: string; error?: string };
+  }>(async () => {
     try {
-      const provider = (await getStoreValue("api-provider")) || "gemini";
+      const stored = (await getStoreValue("api-provider")) || "gemini";
+      const provider = stored === "groq" || stored === "subscription" ? stored : "gemini";
+      const model = (await getStoreValue("api-model")) || "gemini-3-flash-preview";
+
+      // The subscription provider authenticates via Google OAuth, not an API key.
+      if (provider === "subscription") {
+        const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+        const status = GeminiSubscriptionService.getInstance().getStatus();
+        return { success: true, data: { apiKey: "", model, provider, subscriptionStatus: status } };
+      }
+
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
       const apiKey = await getStoreValue(keyName);
-      const model = (await getStoreValue("api-model")) || "gemini-3-flash-preview";
 
       if (!apiKey) {
         return { success: false, error: "API key not found" };
@@ -89,16 +101,39 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   ) => {
     try {
       const { apiKey, model } = config;
-      const provider = config.provider === "groq" ? "groq" : "gemini";
+      const provider = config.provider === "groq" ? "groq" : config.provider === "subscription" ? "subscription" : "gemini";
+
+      if (!model || typeof model !== "string" || !model.trim()) {
+        return { success: false, error: "Invalid model selection" };
+      }
+
+      // The subscription provider needs no API key - it authenticates via
+      // Google OAuth. The other providers keep their per-provider keys so
+      // switching providers never loses the other provider's key.
+      if (provider === "subscription") {
+        const [successModel, successProvider] = await Promise.all([
+          setStoreValue("api-model", model.trim()),
+          setStoreValue("api-provider", provider)
+        ]);
+        if (!successModel || !successProvider) {
+          return { success: false, error: "Failed to save configuration to storage" };
+        }
+        process.env.API_PROVIDER = provider;
+        process.env.API_MODEL = model.trim();
+        delete process.env.API_KEY;
+        const mainWindow = deps.getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("api-key-updated");
+        }
+        console.log(`API configuration saved: Provider=subscription, Model=${model.trim()}`);
+        return { success: true, data: { apiKey: "", model: model.trim(), provider } };
+      }
+
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
 
       // Enhanced validation
       if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
         return { success: false, error: "Invalid API key provided" };
-      }
-
-      if (!model || typeof model !== "string" || !model.trim()) {
-        return { success: false, error: "Invalid model selection" };
       }
 
       // Any non-empty model id is accepted - the provider API itself
@@ -132,7 +167,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       }
 
       console.log(`API configuration saved: Model=${model.trim()}`);
-      return { success: true, data: { apiKey: "***", model: model.trim() } };
+      return { success: true, data: { apiKey: "***", model: model.trim(), provider } };
       
     } catch (error: any) {
       console.error("Error setting API configuration:", error);
@@ -203,6 +238,126 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       return { success: false, error: "Failed to fetch model list" };
     }
   }, "list-groq-models"));
+
+  // ============================================================================
+  // Google Subscription (OAuth) Handlers
+  //
+  // Lets the user consume their Google AI subscription quota through Google's
+  // Code Assist backend instead of a pay-per-token API key. Status errors are
+  // surfaced verbatim - the service already names the real cause.
+  // ============================================================================
+  ipcMain.handle("subscription-get-status", createSafeIpcHandler(async () => {
+    try {
+      const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+      const status = GeminiSubscriptionService.getInstance().getStatus();
+      return { success: true, data: { status } };
+    } catch (error: any) {
+      console.error("Error getting subscription status:", error);
+      return { success: false, error: error?.message || "Failed to get subscription status" };
+    }
+  }, "subscription-get-status"));
+
+  ipcMain.handle("subscription-start-login", createSafeIpcHandler(async () => {
+    try {
+      const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+      const service = GeminiSubscriptionService.getInstance();
+      await service.startLogin();
+      const status = service.getStatus();
+      // Warm the model catalogue now so settings can list models immediately.
+      const models = await service.getModels().catch((error: any) => {
+        console.warn("Subscription model catalogue fetch failed after login:", error?.message);
+        return [];
+      });
+      return { success: true, data: { status, models } };
+    } catch (error: any) {
+      console.error("Error starting subscription login:", error);
+      return { success: false, error: error?.message || "Google subscription sign-in failed" };
+    }
+  }, "subscription-start-login"));
+
+  ipcMain.handle("subscription-cancel-login", createSafeIpcHandler(async () => {
+    try {
+      const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+      const cancelled = GeminiSubscriptionService.getInstance().cancelLogin();
+      return { success: true, data: { cancelled } };
+    } catch (error: any) {
+      console.error("Error cancelling subscription login:", error);
+      return { success: false, error: error?.message || "Failed to cancel sign-in" };
+    }
+  }, "subscription-cancel-login"));
+
+  ipcMain.handle("subscription-sign-out", createSafeIpcHandler(async () => {
+    try {
+      const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+      const result = GeminiSubscriptionService.getInstance().signOut();
+      return result.success
+        ? { success: true }
+        : { success: false, error: result.error || "Failed to sign out" };
+    } catch (error: any) {
+      console.error("Error signing out of subscription:", error);
+      return { success: false, error: error?.message || "Failed to sign out" };
+    }
+  }, "subscription-sign-out"));
+
+  ipcMain.handle("list-subscription-models", createSafeIpcHandler(async () => {
+    try {
+      const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+      const models = await GeminiSubscriptionService.getInstance().getModels();
+      return {
+        success: true,
+        data: { models: models.map((m) => ({ id: m.id, name: m.label })) },
+      };
+    } catch (error: any) {
+      console.error("Error listing subscription models:", error);
+      return { success: false, error: error?.message || "Failed to fetch subscription models" };
+    }
+  }, "list-subscription-models"));
+
+  // Google subscription OAuth client credentials. The secret is never sent
+  // back to the renderer - the UI only learns whether it is configured.
+  ipcMain.handle("subscription-save-oauth-config", createSafeIpcHandler(async (
+    _event: any,
+    config: { clientId: string; clientSecret: string }
+  ) => {
+    try {
+      const clientId = (config?.clientId || "").trim();
+      const clientSecret = (config?.clientSecret || "").trim();
+      if (!clientId || !clientSecret) {
+        return { success: false, error: "Both the OAuth client ID and client secret are required." };
+      }
+      const { GeminiSubscriptionService } = await import("./services/GeminiSubscriptionService");
+      const [okId, okSecret] = await Promise.all([
+        setStoreValue("subscription-oauth-client-id", clientId),
+        setStoreValue("subscription-oauth-client-secret", clientSecret),
+      ]);
+      if (!okId || !okSecret) {
+        return { success: false, error: "Failed to save OAuth configuration to storage." };
+      }
+      GeminiSubscriptionService.configureOAuthCredentials(clientId, clientSecret);
+      return { success: true, data: { configured: true } };
+    } catch (error: any) {
+      console.error("Error saving subscription OAuth config:", error);
+      return { success: false, error: error?.message || "Failed to save OAuth configuration" };
+    }
+  }, "subscription-save-oauth-config"));
+
+  ipcMain.handle("subscription-get-oauth-config", createSafeIpcHandler(async () => {
+    try {
+      const clientId = (await getStoreValue("subscription-oauth-client-id")) || "";
+      const clientSecret = (await getStoreValue("subscription-oauth-client-secret")) || "";
+      const envConfigured = Boolean(
+        (process.env.GEMINI_SUBSCRIPTION_CLIENT_ID || "").trim() &&
+        (process.env.GEMINI_SUBSCRIPTION_CLIENT_SECRET || "").trim()
+      );
+      return {
+        success: true,
+        data: { configured: envConfigured || (Boolean(clientId) && Boolean(clientSecret)) },
+      };
+    } catch (error: any) {
+      console.error("Error getting subscription OAuth config:", error);
+      return { success: false, error: error?.message || "Failed to get OAuth configuration" };
+    }
+  }, "subscription-get-oauth-config"));
 
   // ============================================================================
   // Usage Counter Handlers

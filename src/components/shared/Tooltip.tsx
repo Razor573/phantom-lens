@@ -77,10 +77,12 @@ const GROQ_MODEL_OPTIONS = [
   },
 ];
 
-const defaultModelFor = (p: "gemini" | "groq") =>
+const defaultModelFor = (p: "gemini" | "groq" | "subscription") =>
   p === "groq"
     ? GROQ_MODEL_OPTIONS.find((m) => m.default)?.id || "openai/gpt-oss-120b"
-    : MODEL_OPTIONS.find((m) => m.default)?.id || "gemini-2.5-flash";
+    : p === "subscription"
+      ? "gemini-3.8-flash"
+      : MODEL_OPTIONS.find((m) => m.default)?.id || "gemini-2.5-flash";
 
 export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -96,10 +98,26 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const [error, setError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [groqApiKey, setGroqApiKey] = useState("");
-  const [provider, setProvider] = useState<"gemini" | "groq">("gemini");
+  const [provider, setProvider] = useState<"gemini" | "groq" | "subscription">("gemini");
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
+  // Google subscription (OAuth) provider state. Status errors are shown
+  // verbatim - the service already names the real cause.
+  const [subscriptionStatus, setSubscriptionStatus] = useState<{
+    signedIn: boolean;
+    inProgress: boolean;
+    expiresAt?: number;
+    projectId?: string;
+    error?: string;
+  } | null>(null);
+  const [subscriptionBusy, setSubscriptionBusy] = useState(false);
+  // Google OAuth client credentials for the subscription flow. The secret is
+  // write-only: the UI only ever learns whether it is configured.
+  const [oauthClientId, setOauthClientId] = useState("");
+  const [oauthClientSecret, setOauthClientSecret] = useState("");
+  const [oauthConfigured, setOauthConfigured] = useState(false);
+  const [oauthSaving, setOauthSaving] = useState(false);
   // Refs mirror the latest state so the callbacks below stay stable.
   // Without these, changing the selection/keystroke would recreate the
   // callbacks and re-trigger the "load on open" effect, snapping the
@@ -184,8 +202,32 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Load configuration function - defined before useEffect
   // Fetch the models available to the configured API key and populate the dropdown.
   // Falls back to the built-in presets when the key is missing or the request fails.
-  const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string, providerOverride?: "gemini" | "groq") => {
+  const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string, providerOverride?: "gemini" | "groq" | "subscription") => {
     const prov = providerOverride ?? providerRef.current;
+    // The subscription provider lists models from the Google catalogue, no key needed.
+    if (prov === "subscription") {
+      try {
+        const response = await window.electronAPI.listSubscriptionModels();
+        if (response?.success && response.data && response.data.models.length > 0) {
+          const fetched = response.data.models.map((m) => ({
+            id: m.id,
+            name: m.name,
+            description: m.id,
+          }));
+          const keep = (keepModel ?? selectedModelRef.current).trim() || "gemini-3.8-flash";
+          const merged = fetched.some((m) => m.id === keep)
+            ? fetched
+            : [...fetched, { id: keep, name: keep, description: "Currently configured model" }];
+          setAvailableModels(merged);
+        } else if (response && !response.success && response.error) {
+          // Surface the backend's own message - it names the real cause.
+          setError(response.error);
+        }
+      } catch (err) {
+        console.warn("Failed to refresh subscription model list:", err);
+      }
+      return;
+    }
     const key = (keyOverride ?? (prov === "groq" ? groqApiKeyRef.current : apiKeyRef.current)).trim();
     if (!key) return;
     try {
@@ -209,6 +251,31 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
     }
   }, []);
 
+  // Fetch the Google subscription sign-in status for the settings panel.
+  // The status error is shown verbatim - the service names the real cause.
+  const refreshSubscriptionStatus = useCallback(async () => {
+    try {
+      const response = await window.electronAPI.getSubscriptionStatus();
+      if (response?.success && response.data) {
+        setSubscriptionStatus(response.data.status);
+      }
+    } catch (err) {
+      console.warn("Failed to refresh subscription status:", err);
+    }
+  }, []);
+
+  // Whether the Google OAuth client is configured (secret itself is write-only).
+  const refreshOAuthConfig = useCallback(async () => {
+    try {
+      const response = await window.electronAPI.getSubscriptionOAuthConfig();
+      if (response?.success && response.data) {
+        setOauthConfigured(response.data.configured);
+      }
+    } catch (err) {
+      console.warn("Failed to refresh OAuth config state:", err);
+    }
+  }, []);
+
   const loadCurrentConfig = useCallback(async () => {
     try {
       console.log("Loading API configuration...");
@@ -217,8 +284,22 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       console.log("API config response:", response);
       if (response?.success && response.data) {
         const configData = response.data;
-        const prov = configData.provider === "groq" ? "groq" : "gemini";
+        const prov = configData.provider === "groq" ? "groq" : configData.provider === "subscription" ? "subscription" : "gemini";
         setProvider(prov);
+        if (prov === "subscription") {
+          if (configData.subscriptionStatus) {
+            setSubscriptionStatus(configData.subscriptionStatus);
+          } else {
+            await refreshSubscriptionStatus();
+          }
+          await refreshOAuthConfig();
+          if (configData.model) {
+            console.log("Setting model from config:", configData.model);
+            setSelectedModel(configData.model);
+          }
+          await refreshModelList(undefined, configData.model, prov);
+          return;
+        }
         if (configData.apiKey) {
           console.log("Setting API key from config");
           if (prov === "groq") setGroqApiKey(configData.apiKey);
@@ -238,7 +319,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       console.error("Failed to load API configuration:", error);
       setError("Failed to load configuration");
     }
-  }, [refreshModelList]);
+  }, [refreshModelList, refreshSubscriptionStatus, refreshOAuthConfig]);
 
   useEffect(() => {
     // Load initial configuration only on mount
@@ -251,6 +332,16 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       loadCurrentConfig();
     }
   }, [isVisible, loadCurrentConfig]);
+
+  // Live subscription status updates (sign-in progress, token refresh, errors).
+  useEffect(() => {
+    const cleanup = window.electronAPI.onSubscriptionStatusChanged?.((status) => {
+      setSubscriptionStatus(status);
+    });
+    return () => {
+      cleanup?.();
+    };
+  }, []);
 
   // Listen for open-settings event from main process - toggle visibility
   useEffect(() => {
@@ -340,8 +431,16 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Save configuration handler
   // Switch provider from the settings UI: refresh the model list against the
   // new provider's key, or fall back to its presets when no key is saved yet.
-  const handleProviderSwitch = useCallback((p: "gemini" | "groq") => {
+  const handleProviderSwitch = useCallback((p: "gemini" | "groq" | "subscription") => {
     setProvider(p);
+    setError(null);
+    if (p === "subscription") {
+      // Model list comes from the Google catalogue; status refreshes live.
+      refreshSubscriptionStatus();
+      refreshOAuthConfig();
+      refreshModelList(undefined, selectedModelRef.current, p);
+      return;
+    }
     const key = (p === "groq" ? groqApiKeyRef.current : apiKeyRef.current).trim();
     if (key) {
       refreshModelList(key, selectedModelRef.current, p);
@@ -354,13 +453,103 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           : [...presets, { id: keep, name: keep, description: "Currently configured model" }]
       );
     }
-  }, [refreshModelList]);
+  }, [refreshModelList, refreshSubscriptionStatus, refreshOAuthConfig]);
+
+  // Google subscription sign-in: opens the browser OAuth flow. The backend's
+  // own error message is shown verbatim on failure - it names the real cause.
+  const handleSaveOAuthConfig = useCallback(async () => {
+    setOauthSaving(true);
+    setError(null);
+    try {
+      const response = await window.electronAPI.saveSubscriptionOAuthConfig({
+        clientId: oauthClientId.trim(),
+        clientSecret: oauthClientSecret.trim(),
+      });
+      if (response?.success) {
+        setOauthConfigured(true);
+        setOauthClientSecret("");
+        console.log("Subscription OAuth configuration saved");
+      } else {
+        setError(response?.error || "Failed to save OAuth configuration");
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to save OAuth configuration");
+    } finally {
+      setOauthSaving(false);
+    }
+  }, [oauthClientId, oauthClientSecret]);
+
+  const handleSubscriptionLogin = useCallback(async () => {
+    setSubscriptionBusy(true);
+    setError(null);
+    try {
+      const response = await window.electronAPI.startSubscriptionLogin();
+      if (response?.success && response.data) {
+        setSubscriptionStatus(response.data.status);
+        const models = response.data.models || [];
+        if (models.length > 0) {
+          setAvailableModels(models.map((m) => ({ id: m.id, name: m.label, description: m.id })));
+          const current = selectedModelRef.current.trim();
+          if (!models.some((m) => m.id === current)) {
+            setSelectedModel(models[0].id);
+          }
+        }
+      } else {
+        const message = response?.error || "Google subscription sign-in failed.";
+        setError(message);
+        await refreshSubscriptionStatus();
+      }
+    } catch (err: any) {
+      setError(err?.message || "Google subscription sign-in failed.");
+      await refreshSubscriptionStatus();
+    } finally {
+      setSubscriptionBusy(false);
+    }
+  }, [refreshSubscriptionStatus]);
+
+  const handleSubscriptionSignOut = useCallback(async () => {
+    setSubscriptionBusy(true);
+    setError(null);
+    try {
+      const response = await window.electronAPI.signOutSubscription();
+      if (!response?.success) {
+        setError(response?.error || "Failed to sign out.");
+      }
+    } catch (err: any) {
+      setError(err?.message || "Failed to sign out.");
+    } finally {
+      await refreshSubscriptionStatus();
+      setSubscriptionBusy(false);
+    }
+  }, [refreshSubscriptionStatus]);
 
   const handleSaveConfig = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     
     try {
+      // The subscription provider needs no API key - just a completed sign-in.
+      if (provider === "subscription") {
+        if (!subscriptionStatus?.signedIn) {
+          setError("Sign in with Google first, then save.");
+          setIsLoading(false);
+          return;
+        }
+        const response = await window.electronAPI.setApiConfig({
+          apiKey: "",
+          model: selectedModel,
+          provider: "subscription"
+        });
+        if (response?.success) {
+          console.log("Subscription configuration saved successfully");
+          await loadCurrentConfig();
+        } else {
+          setError(response?.error || "Failed to save configuration");
+        }
+        setIsLoading(false);
+        return;
+      }
+
       console.log("Saving API configuration...");
       const activeKey = provider === "groq" ? groqApiKey : apiKey;
       console.log("Provider:", provider);
@@ -669,8 +858,13 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         model: defaultModelFor(providerRef.current),
         provider: providerRef.current
       });
-      
-      if (providerRef.current === "groq") setGroqApiKey("");
+
+      if (providerRef.current === "subscription") {
+        // Resetting the subscription provider also disconnects the Google session.
+        await window.electronAPI.signOutSubscription().catch(() => {});
+        await refreshSubscriptionStatus();
+      }
+      else if (providerRef.current === "groq") setGroqApiKey("");
       else setApiKey("");
       setSelectedModel(defaultModelFor(providerRef.current));
       console.log("Configuration reset successfully");
@@ -905,7 +1099,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                   <div>
                   <label className="block text-xs text-white/70 mb-1 text-center">Provider</label>
                   <div className="flex gap-2 justify-center">
-                    {(["gemini", "groq"] as const).map((p) => (
+                    {(["gemini", "groq", "subscription"] as const).map((p) => (
                       <button
                         key={p}
                         type="button"
@@ -922,11 +1116,116 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                         } ${isInteractive ? 'hover:bg-blue-500/20 cursor-pointer' : 'cursor-default'}`}
                         style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                       >
-                        {p === "gemini" ? "Gemini" : "Groq"}
+                        {p === "gemini" ? "Gemini" : p === "groq" ? "Groq" : "Google subscription"}
                       </button>
                     ))}
                   </div>
                   </div>
+                  {provider === "subscription" ? (
+                  <div>
+                    <label className="block text-xs text-white/70 mb-1 text-center">Google subscription</label>
+                    <div className={`w-full px-4 py-3 rounded-lg text-sm ${isTransparent ? '' : 'bg-white/5 border border-white/10'}`}
+                      style={isTransparent ? { background: 'transparent', border: 'none' } : {}}>
+                      {subscriptionStatus?.signedIn ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-center gap-2 text-emerald-300 text-xs">
+                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400" />
+                            Signed in{subscriptionStatus.projectId ? ` · ${subscriptionStatus.projectId.slice(0, 24)}` : ""}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => { if (isInteractive && !subscriptionBusy) handleSubscriptionSignOut(); }}
+                            disabled={!isInteractive || subscriptionBusy}
+                            tabIndex={isInteractive ? 0 : -1}
+                            className="w-full px-4 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 disabled:cursor-not-allowed"
+                          >
+                            {subscriptionBusy ? "Working..." : "Sign out"}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-xs text-white/60 text-center">
+                            Use your Google AI subscription quota instead of an API key.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => { if (isInteractive && !subscriptionBusy) handleSubscriptionLogin(); }}
+                            disabled={!isInteractive || subscriptionBusy || subscriptionStatus?.inProgress}
+                            tabIndex={isInteractive ? 0 : -1}
+                            className="w-full px-4 py-2 rounded-lg text-xs font-medium bg-blue-500/30 border border-blue-400/60 text-white hover:bg-blue-500/40 disabled:cursor-not-allowed"
+                          >
+                            {subscriptionBusy || subscriptionStatus?.inProgress ? "Waiting for Google sign-in..." : "Sign in with Google"}
+                          </button>
+                          {subscriptionStatus?.inProgress && (
+                            <button
+                              type="button"
+                              onClick={() => { window.electronAPI.cancelSubscriptionLogin?.(); }}
+                              disabled={!isInteractive}
+                              className="w-full text-xs text-white/50 hover:text-white/80"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {/* Verbatim backend error - never a bare "couldn't connect". */}
+                      {subscriptionStatus?.error && (
+                        <p className="mt-2 text-xs text-red-300/90 text-center">{subscriptionStatus.error}</p>
+                      )}
+                      {/* OAuth client setup - one-time. The secret is write-only. */}
+                      <div className="mt-3 pt-3 border-t border-white/10">
+                        {oauthConfigured ? (
+                          <p className="text-xs text-white/50 text-center">
+                            Google OAuth client configured.
+                            <button
+                              type="button"
+                              onClick={() => { setOauthConfigured(false); }}
+                              disabled={!isInteractive}
+                              className="ml-2 underline hover:text-white/80"
+                            >
+                              Replace
+                            </button>
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            <p className="text-xs text-white/60 text-center">
+                              One-time setup: paste your Google OAuth client credentials.
+                            </p>
+                            <input
+                              type="text"
+                              value={oauthClientId}
+                              onChange={(e) => { if (isInteractive) setOauthClientId(e.target.value); }}
+                              disabled={!isInteractive}
+                              tabIndex={isInteractive ? 0 : -1}
+                              placeholder="Client ID (...apps.googleusercontent.com)"
+                              className={`w-full px-3 py-1.5 rounded-lg text-white text-xs placeholder-white/40 ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
+                              style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                            />
+                            <input
+                              type="password"
+                              value={oauthClientSecret}
+                              onChange={(e) => { if (isInteractive) setOauthClientSecret(e.target.value); }}
+                              disabled={!isInteractive}
+                              tabIndex={isInteractive ? 0 : -1}
+                              placeholder="Client secret"
+                              className={`w-full px-3 py-1.5 rounded-lg text-white text-xs placeholder-white/40 ${isTransparent ? '' : 'bg-white/10 border border-white/20'}`}
+                              style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => { if (isInteractive && !oauthSaving) handleSaveOAuthConfig(); }}
+                              disabled={!isInteractive || oauthSaving || !oauthClientId.trim() || !oauthClientSecret.trim()}
+                              tabIndex={isInteractive ? 0 : -1}
+                              className="w-full px-4 py-1.5 rounded-lg text-xs font-medium bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 disabled:cursor-not-allowed"
+                            >
+                              {oauthSaving ? "Saving..." : "Save OAuth credentials"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  ) : (
                   <div>
                   <label className="block text-xs text-white/70 mb-1 text-center">{provider === "groq" ? "Groq API Key" : "Gemini API Key"}</label>
                   <input
@@ -949,6 +1248,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                     style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                     />
                   </div>
+                  )}
                   <div>
                   <label className="block text-xs text-white/70 mb-1 text-center">Model</label>
                   <select

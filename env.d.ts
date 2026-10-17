@@ -57,6 +57,13 @@ interface Window {
         apiKey: string;
         model: string;
         provider: string;
+        subscriptionStatus?: {
+          signedIn: boolean;
+          inProgress: boolean;
+          expiresAt?: number;
+          projectId?: string;
+          error?: string;
+        };
       };
       error?: string;
     }>;
@@ -74,6 +81,60 @@ interface Window {
       };
       error?: string;
     }>;
+    // Google subscription (OAuth) provider
+    getSubscriptionStatus: () => Promise<{
+      success: boolean;
+      data?: {
+        status: {
+          signedIn: boolean;
+          inProgress: boolean;
+          expiresAt?: number;
+          projectId?: string;
+          error?: string;
+        };
+      };
+      error?: string;
+    }>;
+    startSubscriptionLogin: () => Promise<{
+      success: boolean;
+      data?: {
+        status: { signedIn: boolean; inProgress: boolean; error?: string };
+        models: Array<{ id: string; label: string }>;
+      };
+      error?: string;
+    }>;
+    cancelSubscriptionLogin: () => Promise<{ success: boolean; error?: string }>;
+    signOutSubscription: () => Promise<{ success: boolean; error?: string }>;
+    listSubscriptionModels: () => Promise<{
+      success: boolean;
+      data?: {
+        models: Array<{ id: string; name: string }>;
+      };
+      error?: string;
+    }>;
+    saveSubscriptionOAuthConfig: (config: {
+      clientId: string;
+      clientSecret: string;
+    }) => Promise<{
+      success: boolean;
+      data?: { configured: boolean };
+      error?: string;
+    }>;
+    getSubscriptionOAuthConfig: () => Promise<{
+      success: boolean;
+      data?: { configured: boolean };
+      error?: string;
+    }>;
+    onSubscriptionStatusChanged: (
+      callback: (status: {
+        signedIn: boolean;
+        inProgress: boolean;
+        expiresAt?: number;
+        projectId?: string;
+        error?: string;
+      }) => void
+    ) => () => void;
+    onSubscriptionModelsChanged: (callback: () => void) => () => void;
     onApiKeyUpdated: (callback: () => void) => () => void;
     onApiKeyMissing: (callback: () => void) => () => void;
     setIgnoreMouseEvents: () => Promise<{ success: boolean; error?: string }>;
