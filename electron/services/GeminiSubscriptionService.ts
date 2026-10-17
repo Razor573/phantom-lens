@@ -45,7 +45,8 @@ export const SUBSCRIPTION_SCOPES = [
   'https://www.googleapis.com/auth/experimentsandconfigs',
 ] as const;
 export const GOOGLE_API_USER_AGENT = 'google-api-nodejs-client/9.15.1';
-export const SUBSCRIPTION_SETUP_CLIENT = 'google-cloud-sdk vscode_cloudshelleditor/0.1';
+// PROD endpoint kept for reference: setup calls intentionally use the DAILY
+// endpoint instead (see discoverProject).
 export const SUBSCRIPTION_PROD_ENDPOINT = 'https://cloudcode-pa.googleapis.com';
 export const SUBSCRIPTION_DAILY_ENDPOINT = 'https://daily-cloudcode-pa.googleapis.com';
 export const SUBSCRIPTION_REFRESH_LEAD_MS = 60_000;
@@ -195,17 +196,21 @@ export function resolveOAuthCredentials(): SubscriptionOAuthCredentials {
   return { clientId: clientId.trim(), clientSecret: clientSecret.trim() };
 }
 
-function metadata(ideType: 'ANTIGRAVITY' | 'IDE_UNSPECIFIED'): Record<string, string> {
-  // 'ANTIGRAVITY' is the wire-protocol ideType the Code Assist backend expects.
-  return { ideType, platform: 'PLATFORM_UNSPECIFIED', pluginType: 'GEMINI' };
-}
+/**
+ * Metadata sent with setup (loadCodeAssist/onboardUser) calls. Matches the
+ * native Antigravity control-plane requests: just the ideType, nothing else.
+ */
+const SUBSCRIPTION_SETUP_METADATA = Object.freeze({ ideType: 'ANTIGRAVITY' });
 
 export function subscriptionSetupHeaders(accessToken: string): Record<string, string> {
+  // Deliberately minimal: Authorization + the Antigravity user-agent only.
+  // Older revisions also sent X-Goog-Api-Client (spoofing the Cloud Shell
+  // editor) and a Client-Metadata header; that combination was observed
+  // returning 403 for third-party OAuth clients (2026-10-17), while tools
+  // using this minimal header set work.
   return {
     Authorization: `Bearer ${accessToken}`,
-    'User-Agent': GOOGLE_API_USER_AGENT,
-    'X-Goog-Api-Client': SUBSCRIPTION_SETUP_CLIENT,
-    'Client-Metadata': JSON.stringify(metadata('IDE_UNSPECIFIED')),
+    'User-Agent': SUBSCRIPTION_USER_AGENT,
   };
 }
 
@@ -388,7 +393,7 @@ async function fetchWithDnsRetry(
   }
 }
 
-async function responseJson(response: Response, phase: SubscriptionErrorCode): Promise<any> {
+async function responseJson(response: Response, phase: SubscriptionErrorCode, detail?: string): Promise<any> {
   // fetchWithDnsRetry's AbortSignal deadline also covers consuming the body.
   const body = await response.text();
   if (!response.ok) {
@@ -396,17 +401,18 @@ async function responseJson(response: Response, phase: SubscriptionErrorCode): P
     let oauthError: unknown;
     try { oauthError = JSON.parse(body)?.error; } catch { /* Non-JSON errors are transient session failures. */ }
     const permanent = phase === 'token_refresh' && (status === 400 || status === 401) && oauthError === 'invalid_grant';
+    const where = detail ? ` [${detail}]` : '';
     const message = permanent
       ? 'Google subscription session expired. Sign in again.'
       : status === 401
-        ? 'Google access was rejected. Refresh the session or sign in again.'
+        ? `Google access was rejected. Refresh the session or sign in again.${where}`
         : status === 403
-          ? 'This Google account is not permitted to use the subscription API.'
+          ? `This Google account is not permitted to use the subscription API.${where}`
         : status === 429
-          ? 'Google quota is exhausted or temporarily limited. Try again later.'
+          ? `Google quota is exhausted or temporarily limited. Try again later.${where}`
           : status >= 500
-            ? 'Google is temporarily unavailable. Try again shortly.'
-            : `${phase === 'models' ? 'Google model discovery' : 'Google request'} failed (HTTP ${status}).`;
+            ? `Google is temporarily unavailable. Try again shortly.${where}`
+            : `${phase === 'models' ? 'Google model discovery' : 'Google request'} failed (HTTP ${status}).${where}`;
     throw new SubscriptionError(
       permanent ? 'auth_revoked' : phase,
       message,
@@ -516,13 +522,17 @@ function extractProjectId(value: unknown): string | undefined {
 }
 
 async function discoverProject(accessToken: string, signal: AbortSignal): Promise<string> {
+  // Setup calls go to the DAILY endpoint, not PROD. The PROD endpoint +
+  // spoofed X-Goog-Api-Client header combination was observed returning 403
+  // for third-party OAuth clients; the DAILY endpoint with the minimal
+  // header set is what working third-party integrations use (2026-10-17).
   const headers = subscriptionSetupHeaders(accessToken);
   const loadResponse = await fetchWithDnsRetry(
-    `${SUBSCRIPTION_PROD_ENDPOINT}/v1internal:loadCodeAssist`,
-    { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ metadata: metadata('ANTIGRAVITY') }), signal },
+    `${SUBSCRIPTION_DAILY_ENDPOINT}/v1internal:loadCodeAssist`,
+    { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ metadata: SUBSCRIPTION_SETUP_METADATA }), signal },
     4,
   );
-  const loaded = await responseJson(loadResponse, 'setup');
+  const loaded = await responseJson(loadResponse, 'setup', 'loadCodeAssist');
   const existing = extractProjectId(loaded?.cloudaicompanionProject);
   if (existing) return existing;
 
@@ -533,11 +543,11 @@ async function discoverProject(accessToken: string, signal: AbortSignal): Promis
   }
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     const onboardResponse = await fetchWithDnsRetry(
-      `${SUBSCRIPTION_PROD_ENDPOINT}/v1internal:onboardUser`,
-      { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ tierId, metadata: metadata('ANTIGRAVITY') }), signal },
+      `${SUBSCRIPTION_DAILY_ENDPOINT}/v1internal:onboardUser`,
+      { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ tierId, metadata: SUBSCRIPTION_SETUP_METADATA }), signal },
       4,
     );
-    const onboarded = await responseJson(onboardResponse, 'setup');
+    const onboarded = await responseJson(onboardResponse, 'setup', 'onboardUser');
     const project = onboarded?.done === true
       ? extractProjectId(onboarded?.response?.cloudaicompanionProject) : undefined;
     if (project) return project;
