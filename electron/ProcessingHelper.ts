@@ -142,7 +142,8 @@ export class ProcessingHelper {
       `READABILITY (must follow):`,
       `- Break the answer into short paragraphs separated by blank lines. Never emit one long unbroken block of text.`,
       `- Use bullet or numbered lists for steps, options, or multiple points.`,
-      `- Keep lines reasonably short so the text fits a narrow window without any horizontal scrolling.`
+      `- Keep lines reasonably short so the text fits a narrow window without any horizontal scrolling.`,
+      `- MATH FORMATTING: use LaTeX ($...$ for inline, $$...$$ for display) ONLY for real equations and formulas. Write plain numbers, units, percentages, and option labels as normal text - never wrap them in dollar signs (write $18,000 not $$18,000$$, 52ms not $52\\text{ms}$, 3.0% not $3.0\\%$).`
     );
   }
 

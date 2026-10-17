@@ -4,7 +4,10 @@ import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/cjs/styles/prism";
 import rehypeRaw from "rehype-raw";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import "katex/dist/katex.min.css";
 
 // Hook to track transparency mode
 function useTransparencyMode() {
@@ -63,8 +66,8 @@ export const MarkdownSection = ({
           style={{ overflowWrap: 'break-word', wordBreak: 'break-word' }}
         >
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeRaw]}
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex, rehypeRaw]}
             components={{
               h1: ({ node, ...props }) => (
                 <h1 className="text-lg font-bold mb-3 text-white" {...props} />
