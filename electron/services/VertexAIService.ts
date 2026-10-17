@@ -16,9 +16,53 @@ const SCOPES = ["https://www.googleapis.com/auth/cloud-platform"];
  * same pattern as the Gemini API-key provider's listGeminiModels().
  */
 export class VertexAIService {
-  private auth = new GoogleAuth({ scopes: SCOPES });
+  private auth: GoogleAuth;
   private cachedToken: string | null = null;
   private tokenExpiryMs = 0;
+  private serviceAccountJson: string | null = null;
+
+  constructor() {
+    this.auth = this.buildAuth();
+  }
+
+  private buildAuth(): GoogleAuth {
+    // Pasted service-account key (from Phantom Lens settings) wins;
+    // otherwise fall back to gcloud ADC on the machine.
+    if (this.serviceAccountJson) {
+      try {
+        const credentials = JSON.parse(this.serviceAccountJson);
+        if (credentials?.client_email && credentials?.private_key) {
+          return new GoogleAuth({ credentials, scopes: SCOPES });
+        }
+      } catch {
+        // Invalid JSON - fall through to ADC.
+      }
+    }
+    return new GoogleAuth({ scopes: SCOPES });
+  }
+
+  /** Use a pasted service-account JSON key instead of gcloud ADC. */
+  setServiceAccountJson(json: string | null): void {
+    const trimmed = (json || "").trim();
+    this.serviceAccountJson = trimmed || null;
+    this.auth = this.buildAuth();
+    this.clearToken();
+  }
+
+  /** Validate pasted key JSON early so settings can show a clear error. */
+  static validateServiceAccountJson(json: string): void {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(json);
+    } catch {
+      throw new Error("That isn't valid JSON - paste the full key file contents.");
+    }
+    if (!parsed.client_email || !parsed.private_key) {
+      throw new Error(
+        "That doesn't look like a service account key - it needs client_email and private_key."
+      );
+    }
+  }
 
   /** OAuth2 access token from ADC, cached and refreshed before expiry. */
   async getAccessToken(): Promise<string> {
@@ -37,7 +81,7 @@ export class VertexAIService {
     } catch (e: any) {
       this.cachedToken = null;
       throw new Error(
-        "Vertex AI sign-in not found. On your machine run: gcloud auth application-default login (install the gcloud CLI first), then try again."
+        "Vertex AI sign-in not found. Paste a service account JSON key in settings (Vertex AI provider), or on your machine run: gcloud auth application-default login."
       );
     }
   }

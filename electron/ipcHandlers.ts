@@ -62,6 +62,19 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // ============================================================================
   // API Configuration Handlers
   // ============================================================================
+
+  // Make sure the Vertex AI singleton uses the stored service-account key
+  // (if the user pasted one) rather than gcloud ADC.
+  async function ensureVertexCredentials(): Promise<void> {
+    try {
+      const { vertexAIService } = require("./services/VertexAIService");
+      const stored = (await getStoreValue("vertex-service-account")) || "";
+      vertexAIService.setServiceAccountJson(stored || null);
+    } catch (e) {
+      console.warn("Could not apply stored Vertex AI credentials:", e);
+    }
+  }
+
   ipcMain.handle("get-api-config", createSafeIpcHandler(async () => {
     try {
       const provider = (await getStoreValue("api-provider")) || "gemini";
@@ -69,6 +82,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       const thinkingLevel = (await getStoreValue("gemini-thinking-level")) || "MEDIUM";
       const vertexProject = (await getStoreValue("vertex-project")) || "";
       const vertexLocation = (await getStoreValue("vertex-location")) || "europe-west2";
+      const vertexKeySaved = !!((await getStoreValue("vertex-service-account")) || "");
 
       // Vertex AI uses gcloud ADC instead of an API key: project + location.
       if (provider === "vertex") {
@@ -77,7 +91,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         }
         return {
           success: true,
-          data: { apiKey: "", model, provider, thinkingLevel, vertexProject, vertexLocation }
+          data: { apiKey: "", model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved }
         };
       }
 
@@ -90,7 +104,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
       return {
         success: true,
-        data: { apiKey, model, provider, thinkingLevel, vertexProject, vertexLocation }
+        data: { apiKey, model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved }
       };
     } catch (error: any) {
       console.error("Error getting API config:", error);
@@ -100,7 +114,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("set-api-config", createSafeIpcHandler(async (
     _event: any,
-    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string }
+    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string }
   ) => {
     try {
       const { apiKey, model } = config;
@@ -118,19 +132,33 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         if (!model || typeof model !== "string" || !model.trim()) {
           return { success: false, error: "Invalid model selection" };
         }
+        // Pasted service-account key is optional (ADC fallback); validate
+        // when provided and only overwrite the stored key then.
+        const pastedKey = (config.vertexServiceAccount || "").trim();
+        if (pastedKey) {
+          try {
+            const { VertexAIService } = require("./services/VertexAIService");
+            VertexAIService.validateServiceAccountJson(pastedKey);
+          } catch (e: any) {
+            return { success: false, error: e.message || "Invalid service account key" };
+          }
+        }
         const thinkingLevel = ["LOW", "MEDIUM", "HIGH"].includes(config.thinkingLevel || "")
           ? config.thinkingLevel!
           : "MEDIUM";
-        const [okProject, okLocation, okModel, okProvider, okThinking] = await Promise.all([
+        const saves: Promise<boolean>[] = [
           setStoreValue("vertex-project", vertexProject),
           setStoreValue("vertex-location", vertexLocation),
           setStoreValue("api-model", model.trim()),
           setStoreValue("api-provider", provider),
           setStoreValue("gemini-thinking-level", thinkingLevel)
-        ]);
-        if (!okProject || !okLocation || !okModel || !okProvider || !okThinking) {
+        ];
+        if (pastedKey) saves.push(setStoreValue("vertex-service-account", pastedKey));
+        const results = await Promise.all(saves);
+        if (results.some((r) => !r)) {
           return { success: false, error: "Failed to save configuration to storage" };
         }
+        await ensureVertexCredentials();
         process.env.API_PROVIDER = provider;
         process.env.VERTEX_PROJECT = vertexProject;
         process.env.VERTEX_LOCATION = vertexLocation;
@@ -139,8 +167,9 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send("api-key-updated");
         }
+        const vertexKeySaved = pastedKey ? true : !!((await getStoreValue("vertex-service-account")) || "");
         console.log(`API configuration saved: Provider=vertex, Model=${model.trim()}, Project=${vertexProject}`);
-        return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject, vertexLocation } };
+        return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject, vertexLocation, vertexKeySaved } };
       }
 
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
@@ -191,7 +220,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       }
 
       console.log(`API configuration saved: Model=${model.trim()}`);
-      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject: "", vertexLocation: "" } };
+      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject: "", vertexLocation: "", vertexKeySaved: false } };
       
     } catch (error: any) {
       console.error("Error setting API configuration:", error);
@@ -237,6 +266,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   ipcMain.handle("list-vertex-models", createSafeIpcHandler(async () => {
     try {
       const { vertexAIService } = require("./services/VertexAIService");
+      await ensureVertexCredentials();
       const projectId = (await getStoreValue("vertex-project")) || "";
       const location = (await getStoreValue("vertex-location")) || "europe-west2";
       if (!projectId) {

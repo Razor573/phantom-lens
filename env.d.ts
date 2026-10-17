@@ -53,6 +53,7 @@ interface Window {
       thinkingLevel?: string;
       vertexProject?: string;
       vertexLocation?: string;
+      vertexServiceAccount?: string;
     }) => Promise<{ success: boolean; error?: string }>;
     getApiConfig: () => Promise<{
       success: boolean;
@@ -63,6 +64,7 @@ interface Window {
         thinkingLevel?: string;
         vertexProject?: string;
         vertexLocation?: string;
+        vertexKeySaved?: boolean;
       };
       error?: string;
     }>;

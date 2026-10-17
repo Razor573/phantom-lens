@@ -52,6 +52,7 @@ interface ElectronAPI {
     thinkingLevel?: string;
     vertexProject?: string;
     vertexLocation?: string;
+    vertexServiceAccount?: string;
   }) => Promise<{ success: boolean; error?: string }>;
   getApiConfig: () => Promise<{
     success: boolean;
@@ -62,6 +63,7 @@ interface ElectronAPI {
       thinkingLevel?: string;
       vertexProject?: string;
       vertexLocation?: string;
+      vertexKeySaved?: boolean;
     };
     error?: string;
   }>;
@@ -321,7 +323,7 @@ const electronAPI = {
   getStoreValue: (key: string) => ipcRenderer.invoke("get-store-value", key),
   setStoreValue: (key: string, value: any) =>
     ipcRenderer.invoke("set-store-value", key, value),
-  setApiConfig: (config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string }) =>
+  setApiConfig: (config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string }) =>
     ipcRenderer.invoke("set-api-config", config),
   getApiConfig: () => ipcRenderer.invoke("get-api-config"),
   listGeminiModels: () => ipcRenderer.invoke("list-gemini-models"),

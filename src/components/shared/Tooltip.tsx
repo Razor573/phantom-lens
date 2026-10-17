@@ -118,6 +118,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Vertex AI (gcloud ADC): GCP project ID + region instead of an API key.
   const [vertexProject, setVertexProject] = useState("");
   const [vertexLocation, setVertexLocation] = useState("europe-west2");
+  // Pasted service-account JSON key (no CLI needed). Write-only in the UI.
+  const [vertexKey, setVertexKey] = useState("");
+  const [vertexKeySaved, setVertexKeySaved] = useState(false);
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
@@ -133,6 +136,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const providerRef = useRef(provider);
   const vertexProjectRef = useRef(vertexProject);
   const vertexLocationRef = useRef(vertexLocation);
+  const vertexKeyRef = useRef(vertexKey);
   const selectedModelRef = useRef(selectedModel);
   const thinkingLevelRef = useRef(thinkingLevel);
   useEffect(() => {
@@ -150,6 +154,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   useEffect(() => {
     vertexLocationRef.current = vertexLocation;
   }, [vertexLocation]);
+  useEffect(() => {
+    vertexKeyRef.current = vertexKey;
+  }, [vertexKey]);
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
@@ -279,6 +286,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (prov === "vertex") {
           if (configData.vertexProject) setVertexProject(configData.vertexProject);
           if (configData.vertexLocation) setVertexLocation(configData.vertexLocation);
+          setVertexKeySaved(!!configData.vertexKeySaved);
         } else if (configData.apiKey) {
           console.log("Setting API key from config");
           if (prov === "groq") setGroqApiKey(configData.apiKey);
@@ -453,6 +461,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         // Vertex AI: project + region instead of a key (auth is gcloud ADC).
         vertexProject: vertexProjectRef.current,
         vertexLocation: vertexLocationRef.current,
+        // Pasted service-account key (empty = keep the saved one).
+        vertexServiceAccount: vertexKeyRef.current,
       });
       
       console.log("API config save response:", response);
@@ -462,6 +472,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         setError(null);
         // Reload configuration from backend to ensure UI reflects saved values
         await loadCurrentConfig();
+        // The key field is write-only: clear it after saving.
+        if (provider === "vertex") setVertexKey("");
       } else {
         console.error("Failed to save configuration:", response?.error);
         setError(response?.error || "Failed to save configuration");
@@ -1049,7 +1061,28 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                           }`}
                           style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                         />
-                        <p className="text-[11px] text-white/50 mt-1 text-center">Sign in on your machine first: gcloud auth application-default login. Billed to your GCP credits.</p>
+                        <p className="text-[11px] text-white/50 mt-1 text-center">Billed to your GCP credits. No CLI needed - paste a service account key below.</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs text-white/70 mb-1 text-center">Service account JSON key</label>
+                        <textarea
+                          value={vertexKey}
+                          onChange={(e) => {
+                            if (!isInteractive) return;
+                            setVertexKey(e.target.value);
+                          }}
+                          disabled={!isInteractive}
+                          tabIndex={isInteractive ? 0 : -1}
+                          rows={3}
+                          placeholder={vertexKeySaved ? "Key saved - paste a new one here to replace it" : "Paste the service account JSON key here"}
+                          className={`w-full px-4 py-2 rounded-lg text-white text-xs placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                            isInteractive
+                              ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20'
+                              : 'cursor-default'
+                          }`}
+                          style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                        />
+                        <p className="text-[11px] text-white/50 mt-1 text-center">Cloud Console - IAM &amp; Admin - Service Accounts - create one with the "Vertex AI User" role, add a JSON key, paste it here.</p>
                       </div>
                     </>
                   ) : (

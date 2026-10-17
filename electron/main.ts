@@ -1374,6 +1374,14 @@ async function loadEnvVariables() {
         process.env.VERTEX_PROJECT = vertexProject;
         process.env.VERTEX_LOCATION = vertexLocation;
         process.env.API_MODEL = storedModel;
+        // Pasted service-account key (no CLI needed); falls back to ADC.
+        try {
+          const { vertexAIService } = require("./services/VertexAIService");
+          const storedKey = (await getStoreValue("vertex-service-account")) || "";
+          vertexAIService.setServiceAccountJson(storedKey || null);
+        } catch (e) {
+          console.warn("Could not apply stored Vertex AI credentials:", e);
+        }
         console.log(`API configuration loaded: Provider=vertex, Model=${storedModel}, Project=${vertexProject}`);
         return;
       }
