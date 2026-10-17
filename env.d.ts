@@ -51,6 +51,8 @@ interface Window {
       model: string;
       provider?: string;
       thinkingLevel?: string;
+      vertexProject?: string;
+      vertexLocation?: string;
     }) => Promise<{ success: boolean; error?: string }>;
     getApiConfig: () => Promise<{
       success: boolean;
@@ -59,6 +61,8 @@ interface Window {
         model: string;
         provider: string;
         thinkingLevel?: string;
+        vertexProject?: string;
+        vertexLocation?: string;
       };
       error?: string;
     }>;
@@ -70,6 +74,13 @@ interface Window {
       error?: string;
     }>;
     listGroqModels: () => Promise<{
+      success: boolean;
+      data?: {
+        models: Array<{ id: string; name: string }>;
+      };
+      error?: string;
+    }>;
+    listVertexModels: () => Promise<{
       success: boolean;
       data?: {
         models: Array<{ id: string; name: string }>;

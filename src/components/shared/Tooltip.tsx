@@ -77,10 +77,28 @@ const GROQ_MODEL_OPTIONS = [
   },
 ];
 
-const defaultModelFor = (p: "gemini" | "groq") =>
+const defaultModelFor = (p: "gemini" | "groq" | "vertex") =>
   p === "groq"
     ? GROQ_MODEL_OPTIONS.find((m) => m.default)?.id || "openai/gpt-oss-120b"
-    : MODEL_OPTIONS.find((m) => m.default)?.id || "gemini-2.5-flash";
+    : p === "vertex"
+      ? "gemini-4-argon"
+      : MODEL_OPTIONS.find((m) => m.default)?.id || "gemini-2.5-flash";
+
+// Fallback presets for the Vertex AI provider when the live catalogue
+// can't be reached yet (project not set / gcloud not signed in).
+const VERTEX_MODEL_OPTIONS = [
+  {
+    id: "gemini-4-argon",
+    name: "Gemini 4 Argon",
+    description: "Flagship reasoning model (Google, via Vertex AI)",
+    default: true,
+  },
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description: "Fast flagship flash model (Google, via Vertex AI)",
+  },
+];
 
 export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -96,7 +114,10 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const [error, setError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [groqApiKey, setGroqApiKey] = useState("");
-  const [provider, setProvider] = useState<"gemini" | "groq">("gemini");
+  const [provider, setProvider] = useState<"gemini" | "groq" | "vertex">("gemini");
+  // Vertex AI (gcloud ADC): GCP project ID + region instead of an API key.
+  const [vertexProject, setVertexProject] = useState("");
+  const [vertexLocation, setVertexLocation] = useState("europe-west2");
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
@@ -110,6 +131,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const apiKeyRef = useRef(apiKey);
   const groqApiKeyRef = useRef(groqApiKey);
   const providerRef = useRef(provider);
+  const vertexProjectRef = useRef(vertexProject);
+  const vertexLocationRef = useRef(vertexLocation);
   const selectedModelRef = useRef(selectedModel);
   const thinkingLevelRef = useRef(thinkingLevel);
   useEffect(() => {
@@ -121,6 +144,12 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   useEffect(() => {
     providerRef.current = provider;
   }, [provider]);
+  useEffect(() => {
+    vertexProjectRef.current = vertexProject;
+  }, [vertexProject]);
+  useEffect(() => {
+    vertexLocationRef.current = vertexLocation;
+  }, [vertexLocation]);
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
@@ -191,8 +220,29 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Load configuration function - defined before useEffect
   // Fetch the models available to the configured API key and populate the dropdown.
   // Falls back to the built-in presets when the key is missing or the request fails.
-  const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string, providerOverride?: "gemini" | "groq") => {
+  const refreshModelList = useCallback(async (keyOverride?: string, keepModel?: string, providerOverride?: "gemini" | "groq" | "vertex") => {
     const prov = providerOverride ?? providerRef.current;
+    // Vertex AI lists from the account's live catalogue (no API key - gcloud ADC).
+    if (prov === "vertex") {
+      try {
+        const response = await window.electronAPI.listVertexModels();
+        if (response?.success && response.data && response.data.models.length > 0) {
+          const fetched = response.data.models.map((m) => ({
+            id: m.id,
+            name: m.name,
+            description: m.id,
+          }));
+          const keep = (keepModel ?? selectedModelRef.current).trim();
+          const merged = fetched.some((m) => m.id === keep)
+            ? fetched
+            : [...fetched, { id: keep, name: keep, description: "Currently configured model" }];
+          setAvailableModels(merged);
+        }
+      } catch (err) {
+        console.warn("Failed to refresh Vertex AI model list, keeping presets:", err);
+      }
+      return;
+    }
     const key = (keyOverride ?? (prov === "groq" ? groqApiKeyRef.current : apiKeyRef.current)).trim();
     if (!key) return;
     try {
@@ -224,9 +274,12 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       console.log("API config response:", response);
       if (response?.success && response.data) {
         const configData = response.data;
-        const prov = configData.provider === "groq" ? "groq" : "gemini";
+        const prov = configData.provider === "groq" ? "groq" : configData.provider === "vertex" ? "vertex" : "gemini";
         setProvider(prov);
-        if (configData.apiKey) {
+        if (prov === "vertex") {
+          if (configData.vertexProject) setVertexProject(configData.vertexProject);
+          if (configData.vertexLocation) setVertexLocation(configData.vertexLocation);
+        } else if (configData.apiKey) {
           console.log("Setting API key from config");
           if (prov === "groq") setGroqApiKey(configData.apiKey);
           else setApiKey(configData.apiKey);
@@ -238,7 +291,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (configData.thinkingLevel && ["LOW", "MEDIUM", "HIGH"].includes(configData.thinkingLevel)) {
           setThinkingLevel(configData.thinkingLevel);
         }
-        if (configData.apiKey) {
+        if (prov === "vertex") {
+          await refreshModelList(undefined, configData.model, prov);
+        } else if (configData.apiKey) {
           await refreshModelList(configData.apiKey, configData.model, prov);
         }
       } else {
@@ -350,8 +405,20 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Save configuration handler
   // Switch provider from the settings UI: refresh the model list against the
   // new provider's key, or fall back to its presets when no key is saved yet.
-  const handleProviderSwitch = useCallback((p: "gemini" | "groq") => {
+  const handleProviderSwitch = useCallback((p: "gemini" | "groq" | "vertex") => {
     setProvider(p);
+    if (p === "vertex") {
+      // Show fallback presets immediately; the live catalogue (via gcloud
+      // ADC) replaces them when it resolves.
+      const keep = selectedModelRef.current.trim();
+      setAvailableModels(
+        VERTEX_MODEL_OPTIONS.some((m) => m.id === keep)
+          ? VERTEX_MODEL_OPTIONS
+          : [...VERTEX_MODEL_OPTIONS, { id: keep, name: keep, description: "Currently configured model" }]
+      );
+      refreshModelList(undefined, keep, p);
+      return;
+    }
     const key = (p === "groq" ? groqApiKeyRef.current : apiKeyRef.current).trim();
     if (key) {
       refreshModelList(key, selectedModelRef.current, p);
@@ -383,6 +450,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         model: selectedModel,
         provider,
         thinkingLevel: thinkingLevelRef.current,
+        // Vertex AI: project + region instead of a key (auth is gcloud ADC).
+        vertexProject: vertexProjectRef.current,
+        vertexLocation: vertexLocationRef.current,
       });
       
       console.log("API config save response:", response);
@@ -916,7 +986,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                   <div>
                   <label className="block text-xs text-white/70 mb-1 text-center">Provider</label>
                   <div className="flex gap-2 justify-center">
-                    {(["gemini", "groq"] as const).map((p) => (
+                    {(["gemini", "groq", "vertex"] as const).map((p) => (
                       <button
                         key={p}
                         type="button"
@@ -933,11 +1003,56 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                         } ${isInteractive ? 'hover:bg-blue-500/20 cursor-pointer' : 'cursor-default'}`}
                         style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                       >
-                        {p === "gemini" ? "Gemini" : "Groq"}
+                        {p === "gemini" ? "Gemini" : p === "groq" ? "Groq" : "Vertex AI"}
                       </button>
                     ))}
                   </div>
                   </div>
+                  {provider === "vertex" ? (
+                    <>
+                      <div>
+                        <label className="block text-xs text-white/70 mb-1 text-center">GCP Project ID</label>
+                        <input
+                          type="text"
+                          value={vertexProject}
+                          onChange={(e) => {
+                            if (!isInteractive) return;
+                            setVertexProject(e.target.value);
+                          }}
+                          disabled={!isInteractive}
+                          tabIndex={isInteractive ? 0 : -1}
+                          placeholder="gen-lang-client-0384437564"
+                          className={`w-full px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                            isInteractive
+                              ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20'
+                              : 'cursor-default'
+                          }`}
+                          style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-white/70 mb-1 text-center">Region</label>
+                        <input
+                          type="text"
+                          value={vertexLocation}
+                          onChange={(e) => {
+                            if (!isInteractive) return;
+                            setVertexLocation(e.target.value);
+                          }}
+                          disabled={!isInteractive}
+                          tabIndex={isInteractive ? 0 : -1}
+                          placeholder="europe-west2"
+                          className={`w-full px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                            isInteractive
+                              ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20'
+                              : 'cursor-default'
+                          }`}
+                          style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                        />
+                        <p className="text-[11px] text-white/50 mt-1 text-center">Sign in on your machine first: gcloud auth application-default login. Billed to your GCP credits.</p>
+                      </div>
+                    </>
+                  ) : (
                   <div>
                   <label className="block text-xs text-white/70 mb-1 text-center">{provider === "groq" ? "Groq API Key" : "Gemini API Key"}</label>
                   <input
@@ -960,6 +1075,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                     style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                     />
                   </div>
+                  )}
                   <div>
                   <label className="block text-xs text-white/70 mb-1 text-center">Model</label>
                   <select
@@ -985,7 +1101,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                     ))}
                   </select>
                         </div>
-                  {provider === "gemini" && (
+                  {(provider === "gemini" || provider === "vertex") && (
                     <div className="mt-2">
                       <label className="block text-xs text-white/70 mb-1 text-center">Thinking level</label>
                       <select
@@ -1007,7 +1123,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                         <option value="MEDIUM" className="bg-gray-800 text-white">Medium - balanced (default)</option>
                         <option value="HIGH" className="bg-gray-800 text-white">High - deepest reasoning</option>
                       </select>
-                      <p className="text-[11px] text-white/50 mt-1 text-center">Applies to Gemini 3 models. Higher thinking costs more and is slower.</p>
+                      <p className="text-[11px] text-white/50 mt-1 text-center">Applies to Gemini 3/4 models. Higher thinking costs more and is slower.</p>
                     </div>
                   )}
                 <button

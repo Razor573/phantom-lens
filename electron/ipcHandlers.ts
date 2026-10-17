@@ -65,10 +65,24 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   ipcMain.handle("get-api-config", createSafeIpcHandler(async () => {
     try {
       const provider = (await getStoreValue("api-provider")) || "gemini";
-      const keyName = provider === "groq" ? "groq-api-key" : "api-key";
-      const apiKey = await getStoreValue(keyName);
       const model = (await getStoreValue("api-model")) || "gemini-3-flash-preview";
       const thinkingLevel = (await getStoreValue("gemini-thinking-level")) || "MEDIUM";
+      const vertexProject = (await getStoreValue("vertex-project")) || "";
+      const vertexLocation = (await getStoreValue("vertex-location")) || "europe-west2";
+
+      // Vertex AI uses gcloud ADC instead of an API key: project + location.
+      if (provider === "vertex") {
+        if (!vertexProject) {
+          return { success: false, error: "Vertex AI project not configured" };
+        }
+        return {
+          success: true,
+          data: { apiKey: "", model, provider, thinkingLevel, vertexProject, vertexLocation }
+        };
+      }
+
+      const keyName = provider === "groq" ? "groq-api-key" : "api-key";
+      const apiKey = await getStoreValue(keyName);
 
       if (!apiKey) {
         return { success: false, error: "API key not found" };
@@ -76,7 +90,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
       return {
         success: true,
-        data: { apiKey, model, provider, thinkingLevel }
+        data: { apiKey, model, provider, thinkingLevel, vertexProject, vertexLocation }
       };
     } catch (error: any) {
       console.error("Error getting API config:", error);
@@ -86,11 +100,49 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("set-api-config", createSafeIpcHandler(async (
     _event: any,
-    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string }
+    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string }
   ) => {
     try {
       const { apiKey, model } = config;
-      const provider = config.provider === "groq" ? "groq" : "gemini";
+      const provider = config.provider === "groq" ? "groq" : config.provider === "vertex" ? "vertex" : "gemini";
+
+      // Vertex AI: no API key - needs a GCP project ID (+ region).
+      // Keys are kept per-provider so switching providers never loses
+      // the other provider's key.
+      if (provider === "vertex") {
+        const vertexProject = (config.vertexProject || "").trim();
+        const vertexLocation = (config.vertexLocation || "europe-west2").trim() || "europe-west2";
+        if (!vertexProject) {
+          return { success: false, error: "Vertex AI needs a GCP project ID" };
+        }
+        if (!model || typeof model !== "string" || !model.trim()) {
+          return { success: false, error: "Invalid model selection" };
+        }
+        const thinkingLevel = ["LOW", "MEDIUM", "HIGH"].includes(config.thinkingLevel || "")
+          ? config.thinkingLevel!
+          : "MEDIUM";
+        const [okProject, okLocation, okModel, okProvider, okThinking] = await Promise.all([
+          setStoreValue("vertex-project", vertexProject),
+          setStoreValue("vertex-location", vertexLocation),
+          setStoreValue("api-model", model.trim()),
+          setStoreValue("api-provider", provider),
+          setStoreValue("gemini-thinking-level", thinkingLevel)
+        ]);
+        if (!okProject || !okLocation || !okModel || !okProvider || !okThinking) {
+          return { success: false, error: "Failed to save configuration to storage" };
+        }
+        process.env.API_PROVIDER = provider;
+        process.env.VERTEX_PROJECT = vertexProject;
+        process.env.VERTEX_LOCATION = vertexLocation;
+        process.env.API_MODEL = model.trim();
+        const mainWindow = deps.getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send("api-key-updated");
+        }
+        console.log(`API configuration saved: Provider=vertex, Model=${model.trim()}, Project=${vertexProject}`);
+        return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject, vertexLocation } };
+      }
+
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
 
       // Enhanced validation
@@ -139,7 +191,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       }
 
       console.log(`API configuration saved: Model=${model.trim()}`);
-      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel } };
+      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject: "", vertexLocation: "" } };
       
     } catch (error: any) {
       console.error("Error setting API configuration:", error);
@@ -179,6 +231,24 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       return { success: false, error: "Failed to fetch model list" };
     }
   }, "list-gemini-models"));
+
+  // Vertex AI: dynamic catalogue from the publisher models API, authenticated
+  // with the user's gcloud ADC (same pattern as listGeminiModels).
+  ipcMain.handle("list-vertex-models", createSafeIpcHandler(async () => {
+    try {
+      const { vertexAIService } = require("./services/VertexAIService");
+      const projectId = (await getStoreValue("vertex-project")) || "";
+      const location = (await getStoreValue("vertex-location")) || "europe-west2";
+      if (!projectId) {
+        return { success: false, error: "Set your GCP project ID first" };
+      }
+      const models = await vertexAIService.listModels(projectId, location);
+      return { success: true, data: { models } };
+    } catch (error: any) {
+      console.error("Error listing Vertex AI models:", error);
+      return { success: false, error: error.message || "Failed to fetch Vertex AI model list" };
+    }
+  }, "list-vertex-models"));
 
   // Groq uses an OpenAI-compatible API: GET /openai/v1/models with a Bearer key.
   ipcMain.handle("list-groq-models", createSafeIpcHandler(async () => {

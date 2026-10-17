@@ -1363,9 +1363,32 @@ function quitApplication(): void {
 async function loadEnvVariables() {
   try {
     const provider = (await getStoreValue("api-provider")) || "gemini";
+    const storedModel = (await getStoreValue("api-model")) || "gemini-2.0-flash";
+
+    // Vertex AI authenticates via gcloud ADC - project/location, no API key.
+    if (provider === "vertex") {
+      const vertexProject = await getStoreValue("vertex-project");
+      const vertexLocation = (await getStoreValue("vertex-location")) || "europe-west2";
+      if (vertexProject && storedModel) {
+        process.env.API_PROVIDER = provider;
+        process.env.VERTEX_PROJECT = vertexProject;
+        process.env.VERTEX_LOCATION = vertexLocation;
+        process.env.API_MODEL = storedModel;
+        console.log(`API configuration loaded: Provider=vertex, Model=${storedModel}, Project=${vertexProject}`);
+        return;
+      }
+      console.log("No Vertex AI project in user preferences. User will be prompted to enter one.");
+      setTimeout(() => {
+          const mainWindow = getMainWindow();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send("api-key-missing");
+          }
+      }, 2000);
+      return;
+    }
+
     const keyName = provider === "groq" ? "groq-api-key" : "api-key";
     const storedApiKey = await getStoreValue(keyName);
-    const storedModel = (await getStoreValue("api-model")) || "gemini-2.0-flash";
 
     if (storedApiKey && storedModel) {
       process.env.API_PROVIDER = provider;

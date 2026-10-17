@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { IProcessingHelperDeps } from "./main";
 import { ScreenshotHelper } from "./ScreenshotHelper";
+import { vertexAIService } from "./services/VertexAIService";
 import fs from "node:fs";
 import process from "process";
 
@@ -128,7 +129,8 @@ export class ProcessingHelper {
   }
 
   private providerLabel(): string {
-    return (process.env.API_PROVIDER || "gemini") === "groq" ? "Groq" : "Gemini";
+    const p = process.env.API_PROVIDER || "gemini";
+    return p === "groq" ? "Groq" : p === "vertex" ? "Vertex AI" : "Gemini";
   }
 
   /**
@@ -145,6 +147,37 @@ export class ProcessingHelper {
       `- Keep lines reasonably short so the text fits a narrow window without any horizontal scrolling.`,
       `- MATH FORMATTING: write ALL math as plain Unicode text - use × ÷ → ⟹ ≤ ≥ ² ₀ ≠ ± − directly from the keyboard. NEVER type LaTeX backslash commands like \\times \\frac \\text \\sqrt \\% outside of $...$ delimiters. NEVER wrap plain values in dollar signs: write $18,000 and 52ms and 3.0% as plain text, never $$18,000$$ or $52\\text{ms}$ or $3.0\\%$. Only use $...$ for genuinely complex multi-step equations, and keep those simple too.`
     );
+  }
+
+  /**
+   * Vertex AI streaming via Application Default Credentials
+   * (`gcloud auth application-default login` on the user's machine).
+   * Yields plain text chunks; project/location come from settings.
+   */
+  private async *streamVertexChatCompletion(
+    signal: AbortSignal,
+    model: string,
+    prompt: string,
+    base64Images: string[]
+  ): AsyncGenerator<string> {
+    const projectId = (process.env.VERTEX_PROJECT || "").trim();
+    const location = (process.env.VERTEX_LOCATION || "europe-west2").trim();
+    if (!projectId) {
+      throw new Error(
+        "Vertex AI project not set. Open settings, choose the Vertex AI provider and enter your GCP project ID."
+      );
+    }
+    const thinkingLevel =
+      (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
+    yield* vertexAIService.streamGenerateContent({
+      projectId,
+      location,
+      model,
+      prompt,
+      base64Images,
+      thinkingLevel,
+      signal,
+    });
   }
 
   /**
@@ -487,7 +520,8 @@ export class ProcessingHelper {
         // Get model directly from config store via deps
         const model = await this.deps.getConfiguredModel();
 
-        if (!apiKey) {
+        // Vertex AI authenticates via gcloud ADC, not an API key.
+        if (provider !== "vertex" && !apiKey) {
           throw new Error(
             "API key not found. Please configure it in settings."
           );
@@ -502,7 +536,7 @@ export class ProcessingHelper {
           const responseResult = await this.generateResponseWithImages(
             signal,
             base64Images,
-            apiKey,
+            apiKey ?? "",
             model
           );
 
@@ -650,6 +684,48 @@ export class ProcessingHelper {
       signal.addEventListener("abort", abortHandler);
 
       const mainWindow = this.deps.getMainWindow();
+
+      // Vertex AI path - same prompt, streamed via ADC-authenticated SSE.
+      if ((process.env.API_PROVIDER || "gemini") === "vertex") {
+        try {
+          accumulatedText = "";
+          await this.consumeStreamWithTimeout(
+            this.streamVertexChatCompletion(signal, model, prompt, base64Images),
+            (chunkText) => {
+              accumulatedText += chunkText;
+
+              // Send chunk to UI for live markdown rendering
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                chunksSent = true; // Mark that we've sent at least one chunk
+                mainWindow.webContents.send(
+                  this.deps.PROCESSING_EVENTS.RESPONSE_CHUNK,
+                  { response: accumulatedText }
+                );
+              }
+            },
+            signal
+          );
+
+          responseText = accumulatedText;
+
+          // Send final success message
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              const main = require("./main");
+              main.saveResponseToHistory?.(responseText);
+            } catch {}
+            mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.RESPONSE_SUCCESS, { response: responseText });
+          }
+
+          return { success: true, data: responseText };
+        } finally {
+          try {
+            signal.removeEventListener("abort", abortHandler);
+          } catch (e) {
+            // Ignore if removeEventListener fails - signal may already be cleaned up
+          }
+        }
+      }
 
       // Groq (OpenAI-compatible) path - same prompt, streamed via SSE.
       if ((process.env.API_PROVIDER || "gemini") === "groq") {
@@ -853,7 +929,8 @@ export class ProcessingHelper {
       // Get model directly from config store via deps
       const model = await this.deps.getConfiguredModel();
 
-      if (!apiKey) {
+      // Vertex AI authenticates via gcloud ADC, not an API key.
+      if (provider !== "vertex" && !apiKey) {
         throw new Error("API key not found. Please configure it in settings.");
       }
 
@@ -885,7 +962,8 @@ export class ProcessingHelper {
       }
 
       // For follow-up, use the same approach as the initial response, including analysis/summary
-      const genAI = new GoogleGenerativeAI(apiKey);
+      // (vertex carries no API key - its branch returns before this client is used)
+      const genAI = new GoogleGenerativeAI(apiKey ?? "");
       const geminiModelId = model.startsWith("gemini-")
         ? `models/${model}`
         : model;
@@ -984,12 +1062,53 @@ export class ProcessingHelper {
 
       let followUpResponse = "";
 
+      // Vertex AI path - same prompt, streamed via ADC-authenticated SSE.
+      if ((process.env.API_PROVIDER || "gemini") === "vertex") {
+        try {
+          let accumulatedText = "";
+          await this.consumeStreamWithTimeout(
+            this.streamVertexChatCompletion(signal, model, prompt, validBase64Images),
+            (chunkText) => {
+              accumulatedText += chunkText;
+
+              // Send chunk to UI for live markdown rendering
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  this.deps.PROCESSING_EVENTS.FOLLOW_UP_CHUNK,
+                  { response: accumulatedText }
+                );
+              }
+            },
+            signal
+          );
+
+          followUpResponse = accumulatedText;
+
+          // Send final success message
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+              const main = require("./main");
+              main.saveResponseToHistory?.(followUpResponse);
+            } catch {}
+            mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.FOLLOW_UP_SUCCESS, { response: followUpResponse });
+          }
+        } finally {
+          try {
+            signal.removeEventListener("abort", abortHandler);
+          } catch (e) {
+            // Ignore if removeEventListener fails - signal may already be cleaned up
+          }
+        }
+
+        return { success: true, data: followUpResponse };
+      }
+
       // Groq (OpenAI-compatible) path - same prompt, streamed via SSE.
       if ((process.env.API_PROVIDER || "gemini") === "groq") {
         try {
           let accumulatedText = "";
           await this.consumeStreamWithTimeout(
-            this.streamGroqChatCompletion(signal, apiKey, model, prompt, validBase64Images),
+            this.streamGroqChatCompletion(signal, apiKey ?? "", model, prompt, validBase64Images),
             (chunkText) => {
               accumulatedText += chunkText;
 
