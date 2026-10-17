@@ -3,7 +3,6 @@ import { IProcessingHelperDeps } from "./main";
 import { ScreenshotHelper } from "./ScreenshotHelper";
 import fs from "node:fs";
 import process from "process";
-import { GeminiSubscriptionService } from "./services/GeminiSubscriptionService";
 
 export class ProcessingHelper {
   private deps: IProcessingHelperDeps;
@@ -129,31 +128,7 @@ export class ProcessingHelper {
   }
 
   private providerLabel(): string {
-    const provider = process.env.API_PROVIDER || "gemini";
-    if (provider === "groq") return "Groq";
-    if (provider === "subscription") return "Google subscription";
-    return "Gemini";
-  }
-
-  /**
-   * Google subscription (OAuth) chat-completions streaming.
-   * Adapts the subscription service's string chunks into the { text() }
-   * shape so consumeStreamWithTimeout can be reused as-is.
-   */
-  private async *streamSubscriptionChatCompletion(
-    signal: AbortSignal,
-    model: string,
-    prompt: string,
-    base64Images: string[]
-  ): AsyncGenerator<{ text: () => string }> {
-    const service = GeminiSubscriptionService.getInstance();
-    const images = base64Images
-      .filter((data) => data && typeof data === "string" && data.length > 100)
-      .map((data) => ({ mimeType: "image/png", data }));
-    const stream = service.stream({ model, userPrompt: prompt, images, signal });
-    for await (const text of stream) {
-      if (text) yield { text: () => text };
-    }
+    return (process.env.API_PROVIDER || "gemini") === "groq" ? "Groq" : "Gemini";
   }
 
   /**
@@ -511,12 +486,12 @@ export class ProcessingHelper {
         // Get model directly from config store via deps
         const model = await this.deps.getConfiguredModel();
 
-        // The subscription provider authenticates via Google OAuth, not an API key.
-        if (!apiKey && provider !== "subscription") {
+        if (!apiKey) {
           throw new Error(
             "API key not found. Please configure it in settings."
           );
         }
+
         const base64Images = imageDataList.map(
           (data) => data // Keep the base64 string as is
         );
@@ -526,7 +501,7 @@ export class ProcessingHelper {
           const responseResult = await this.generateResponseWithImages(
             signal,
             base64Images,
-            apiKey ?? "",
+            apiKey,
             model
           );
 
@@ -664,79 +639,6 @@ export class ProcessingHelper {
       signal.addEventListener("abort", abortHandler);
 
       const mainWindow = this.deps.getMainWindow();
-
-      // Google subscription (OAuth) path - same prompt, streamed through the
-      // subscription backend. Errors from this path are already user-facing
-      // (the service surfaces the backend's own messages verbatim), so they
-      // bypass the generic classifier below.
-      if ((process.env.API_PROVIDER || "gemini") === "subscription") {
-        try {
-          accumulatedText = "";
-          await this.consumeStreamWithTimeout(
-            this.streamSubscriptionChatCompletion(signal, model, prompt, base64Images),
-            (chunkText) => {
-              accumulatedText += chunkText;
-
-              // Send chunk to UI for live markdown rendering
-              if (mainWindow && !mainWindow.isDestroyed()) {
-                chunksSent = true; // Mark that we've sent at least one chunk
-                mainWindow.webContents.send(
-                  this.deps.PROCESSING_EVENTS.RESPONSE_CHUNK,
-                  { response: accumulatedText }
-                );
-              }
-            },
-            signal
-          );
-
-          responseText = accumulatedText;
-
-          // Send final success message
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            try {
-              const main = require("./main");
-              main.saveResponseToHistory?.(responseText);
-            } catch {}
-            mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.RESPONSE_SUCCESS, { response: responseText });
-          }
-
-          return { success: true, data: responseText };
-        } catch (error: any) {
-          // User-cancelled: mirror the main path's cancel behavior.
-          if (error?.message === "Request aborted" || error?.name === "AbortError") {
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send(
-                this.deps.PROCESSING_EVENTS.INITIAL_RESPONSE_ERROR,
-                "Response generation canceled."
-              );
-            }
-            return { success: false, error: "Response generation canceled." };
-          }
-          // Partial content already shown stays; otherwise surface the
-          // service's own message verbatim - it names the real cause.
-          if (chunksSent) {
-            if (mainWindow && !mainWindow.isDestroyed() && accumulatedText) {
-              mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.RESPONSE_SUCCESS, { response: accumulatedText });
-            }
-            return { success: true, data: accumulatedText || "" };
-          }
-          const message = error?.message || "Google subscription request failed. Please try again.";
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send(
-              this.deps.PROCESSING_EVENTS.INITIAL_RESPONSE_ERROR,
-              message
-            );
-          }
-          this.deps.setView("initial");
-          return { success: false, error: message };
-        } finally {
-          try {
-            signal.removeEventListener("abort", abortHandler);
-          } catch (e) {
-            // Ignore if removeEventListener fails - signal may already be cleaned up
-          }
-        }
-      }
 
       // Groq (OpenAI-compatible) path - same prompt, streamed via SSE.
       if ((process.env.API_PROVIDER || "gemini") === "groq") {

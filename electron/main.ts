@@ -9,8 +9,6 @@ import { incrementAppOpenCounter } from "./UsageCounter";
 import { extractFileText, ATTACH_DIALOG_FILTERS } from "./fileTextExtractor";
 import path from "path";
 import { randomUUID } from "crypto";
-import { GeminiSubscriptionService, initializeSubscriptionLifecycle } from "./services/GeminiSubscriptionService";
-import { subscriptionTokenStore } from "./services/subscriptionTokenStore";
 
 let store: any = null;
 // Write lock to prevent concurrent writes to config file
@@ -1362,19 +1360,7 @@ function quitApplication(): void {
 
 async function loadEnvVariables() {
   try {
-    const stored = (await getStoreValue("api-provider")) || "gemini";
-    const provider = stored === "groq" || stored === "subscription" ? stored : "gemini";
-
-    // The subscription provider authenticates via Google OAuth, not an API key.
-    if (provider === "subscription") {
-      const storedModel = (await getStoreValue("api-model")) || "gemini-3.8-flash";
-      process.env.API_PROVIDER = provider;
-      process.env.API_MODEL = storedModel;
-      delete process.env.API_KEY;
-      console.log(`API configuration loaded: Provider=subscription, Model=${storedModel}`);
-      return;
-    }
-
+    const provider = (await getStoreValue("api-provider")) || "gemini";
     const keyName = provider === "groq" ? "groq-api-key" : "api-key";
     const storedApiKey = await getStoreValue(keyName);
     const storedModel = (await getStoreValue("api-model")) || "gemini-2.0-flash";
@@ -1423,32 +1409,6 @@ async function initializeApp() {
     });
     
     initializeHelpers();
-
-    // Google subscription (OAuth) provider: wire the token store, restore any
-    // saved session, and relay status/model changes to the renderer.
-    GeminiSubscriptionService.configureStore(subscriptionTokenStore);
-    try {
-      const oauthClientId = (await getStoreValue("subscription-oauth-client-id")) || "";
-      const oauthClientSecret = (await getStoreValue("subscription-oauth-client-secret")) || "";
-      GeminiSubscriptionService.configureOAuthCredentials(oauthClientId, oauthClientSecret);
-    } catch (error) {
-      console.warn("[Main] Could not load subscription OAuth credentials:", error);
-    }
-    initializeSubscriptionLifecycle(
-      app,
-      (status) => {
-        const mainWindow = state.mainWindow;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("subscription-status-changed", status);
-        }
-      },
-      () => {
-        const mainWindow = state.mainWindow;
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send("subscription-models-changed");
-        }
-      }
-    );
     
     initializeIpcHandlers({
       getMainWindow: () => state.mainWindow,
@@ -1714,11 +1674,6 @@ app.on("before-quit", () => {
     dimensionUpdateTimeout = null;
   }
   cleanupAllFiles();
-  try {
-    GeminiSubscriptionService.getInstance().dispose();
-  } catch {
-    /* service may not have been configured */
-  }
   if (state.screenCaptureHelper) {
     state.screenCaptureHelper.stopScreenCaptureProtection();
   }

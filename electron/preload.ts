@@ -312,29 +312,6 @@ const electronAPI = {
   getApiConfig: () => ipcRenderer.invoke("get-api-config"),
   listGeminiModels: () => ipcRenderer.invoke("list-gemini-models"),
   listGroqModels: () => ipcRenderer.invoke("list-groq-models"),
-  // Google subscription (OAuth) provider
-  getSubscriptionStatus: () => ipcRenderer.invoke("subscription-get-status"),
-  startSubscriptionLogin: () => ipcRenderer.invoke("subscription-start-login"),
-  cancelSubscriptionLogin: () => ipcRenderer.invoke("subscription-cancel-login"),
-  signOutSubscription: () => ipcRenderer.invoke("subscription-sign-out"),
-  listSubscriptionModels: () => ipcRenderer.invoke("list-subscription-models"),
-  saveSubscriptionOAuthConfig: (config: { clientId: string; clientSecret: string }) =>
-    ipcRenderer.invoke("subscription-save-oauth-config", config),
-  getSubscriptionOAuthConfig: () => ipcRenderer.invoke("subscription-get-oauth-config"),
-  onSubscriptionStatusChanged: (callback: (status: any) => void) => {
-    const subscription = (_event: any, status: any) => callback(status);
-    ipcRenderer.on("subscription-status-changed", subscription);
-    return () => {
-      ipcRenderer.removeListener("subscription-status-changed", subscription);
-    };
-  },
-  onSubscriptionModelsChanged: (callback: () => void) => {
-    const subscription = () => callback();
-    ipcRenderer.on("subscription-models-changed", subscription);
-    return () => {
-      ipcRenderer.removeListener("subscription-models-changed", subscription);
-    };
-  },
   onApiKeyUpdated: (callback: () => void) => {
     const subscription = () => callback();
     ipcRenderer.on("api-key-updated", subscription);
