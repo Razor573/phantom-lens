@@ -564,7 +564,17 @@ export class ProcessingHelper {
       const geminiModelId = model.startsWith("gemini-")
         ? `models/${model}`
         : model;
-      const geminiModel = genAI.getGenerativeModel({ model: geminiModelId });
+      // thinkingLevel is only valid for Gemini 3 models (2.5 uses thinkingBudget).
+      // The legacy SDK doesn't type thinkingConfig, so it's passed untyped -
+      // at runtime it's plain JSON in the request body.
+      const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
+      const generationConfig = /^gemini-3/.test(model)
+        ? ({ thinkingConfig: { thinkingLevel } } as any)
+        : undefined;
+      const geminiModel = genAI.getGenerativeModel({
+        model: geminiModelId,
+        ...(generationConfig ? { generationConfig } : {}),
+      });
 
       const imageParts = base64Images.map((data) => ({
         inlineData: {
@@ -878,7 +888,14 @@ export class ProcessingHelper {
       const geminiModelId = model.startsWith("gemini-")
         ? `models/${model}`
         : model;
-      const geminiModel = genAI.getGenerativeModel({ model: geminiModelId });
+      const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
+      const generationConfig = /^gemini-3/.test(model)
+        ? ({ thinkingConfig: { thinkingLevel } } as any)
+        : undefined;
+      const geminiModel = genAI.getGenerativeModel({
+        model: geminiModelId,
+        ...(generationConfig ? { generationConfig } : {}),
+      });
 
       const imageParts = validBase64Images.map((data) => ({
         inlineData: {

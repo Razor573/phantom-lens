@@ -50,6 +50,7 @@ interface Window {
       apiKey: string;
       model: string;
       provider?: string;
+      thinkingLevel?: string;
     }) => Promise<{ success: boolean; error?: string }>;
     getApiConfig: () => Promise<{
       success: boolean;
@@ -57,6 +58,7 @@ interface Window {
         apiKey: string;
         model: string;
         provider: string;
+        thinkingLevel?: string;
       };
       error?: string;
     }>;

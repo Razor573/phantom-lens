@@ -68,6 +68,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
       const apiKey = await getStoreValue(keyName);
       const model = (await getStoreValue("api-model")) || "gemini-3-flash-preview";
+      const thinkingLevel = (await getStoreValue("gemini-thinking-level")) || "MEDIUM";
 
       if (!apiKey) {
         return { success: false, error: "API key not found" };
@@ -75,7 +76,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
       return {
         success: true,
-        data: { apiKey, model, provider }
+        data: { apiKey, model, provider, thinkingLevel }
       };
     } catch (error: any) {
       console.error("Error getting API config:", error);
@@ -85,7 +86,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("set-api-config", createSafeIpcHandler(async (
     _event: any,
-    config: { apiKey: string; model: string; provider?: string }
+    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string }
   ) => {
     try {
       const { apiKey, model } = config;
@@ -101,18 +102,24 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         return { success: false, error: "Invalid model selection" };
       }
 
+      // Thinking level only applies to the Gemini provider (Gemini 3 models).
+      const thinkingLevel = ["LOW", "MEDIUM", "HIGH"].includes(config.thinkingLevel || "")
+        ? config.thinkingLevel!
+        : "MEDIUM";
+
       // Any non-empty model id is accepted - the provider API itself
       // validates whether the key has access to the requested model.
 
       // Store the configuration (keys are kept per-provider so switching
       // providers never loses the other provider's key)
-      const [successKey, successModel, successProvider] = await Promise.all([
+      const [successKey, successModel, successProvider, successThinking] = await Promise.all([
         setStoreValue(keyName, apiKey.trim()),
         setStoreValue("api-model", model.trim()),
-        setStoreValue("api-provider", provider)
+        setStoreValue("api-provider", provider),
+        setStoreValue("gemini-thinking-level", thinkingLevel)
       ]);
 
-      if (!successKey || !successModel || !successProvider) {
+      if (!successKey || !successModel || !successProvider || !successThinking) {
         console.error("Failed to save one or more API config values to store.");
         return {
           success: false,
@@ -132,7 +139,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       }
 
       console.log(`API configuration saved: Model=${model.trim()}`);
-      return { success: true, data: { apiKey: "***", model: model.trim() } };
+      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel } };
       
     } catch (error: any) {
       console.error("Error setting API configuration:", error);

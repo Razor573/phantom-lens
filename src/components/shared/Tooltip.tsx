@@ -100,6 +100,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
+  // Thinking level for Gemini 3 models (LOW/MEDIUM/HIGH). Only sent for
+  // gemini-3* models; the API default when unset is MEDIUM.
+  const [thinkingLevel, setThinkingLevel] = useState("MEDIUM");
   // Refs mirror the latest state so the callbacks below stay stable.
   // Without these, changing the selection/keystroke would recreate the
   // callbacks and re-trigger the "load on open" effect, snapping the
@@ -108,6 +111,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const groqApiKeyRef = useRef(groqApiKey);
   const providerRef = useRef(provider);
   const selectedModelRef = useRef(selectedModel);
+  const thinkingLevelRef = useRef(thinkingLevel);
   useEffect(() => {
     apiKeyRef.current = apiKey;
   }, [apiKey]);
@@ -120,6 +124,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
+  useEffect(() => {
+    thinkingLevelRef.current = thinkingLevel;
+  }, [thinkingLevel]);
   const apiKeyInputRef = useRef<HTMLInputElement>(null);
   const modelSelectRef = useRef<HTMLSelectElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
@@ -227,6 +234,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (configData.model) {
           console.log("Setting model from config:", configData.model);
           setSelectedModel(configData.model);
+        }
+        if (configData.thinkingLevel && ["LOW", "MEDIUM", "HIGH"].includes(configData.thinkingLevel)) {
+          setThinkingLevel(configData.thinkingLevel);
         }
         if (configData.apiKey) {
           await refreshModelList(configData.apiKey, configData.model, prov);
@@ -371,7 +381,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       const response = await window.electronAPI.setApiConfig({
         apiKey: activeKey.trim(),
         model: selectedModel,
-        provider
+        provider,
+        thinkingLevel: thinkingLevelRef.current,
       });
       
       console.log("API config save response:", response);
@@ -974,6 +985,31 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                     ))}
                   </select>
                         </div>
+                  {provider === "gemini" && (
+                    <div className="mt-2">
+                      <label className="block text-xs text-white/70 mb-1 text-center">Thinking level</label>
+                      <select
+                        value={thinkingLevel}
+                        onChange={(e) => {
+                          if (!isInteractive) return;
+                          setThinkingLevel(e.target.value);
+                        }}
+                        disabled={!isInteractive}
+                        tabIndex={isInteractive ? 0 : -1}
+                        className={`w-full px-4 py-2 rounded-lg text-white text-sm transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                          isInteractive
+                            ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20'
+                            : 'cursor-default'
+                        }`}
+                        style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                      >
+                        <option value="LOW" className="bg-gray-800 text-white">Low - fastest, cheapest</option>
+                        <option value="MEDIUM" className="bg-gray-800 text-white">Medium - balanced (default)</option>
+                        <option value="HIGH" className="bg-gray-800 text-white">High - deepest reasoning</option>
+                      </select>
+                      <p className="text-[11px] text-white/50 mt-1 text-center">Applies to Gemini 3 models. Higher thinking costs more and is slower.</p>
+                    </div>
+                  )}
                 <button
                   ref={saveButtonRef}
                   onClick={handleSaveConfig}

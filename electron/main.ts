@@ -387,6 +387,7 @@ export interface IProcessingHelperDeps {
   getView: () => "initial" | "response" | "followup";
   setView: (view: "initial" | "response" | "followup") => void;
   getConfiguredModel: () => Promise<string>;
+  getConfiguredThinkingLevel: () => Promise<string>;
   setHasFollowedUp: (hasFollowedUp: boolean) => void;
   clearQueues: () => void;
   PROCESSING_EVENTS: typeof state.PROCESSING_EVENTS;
@@ -1035,6 +1036,7 @@ function initializeHelpers() {
     setHasFollowedUp,
     PROCESSING_EVENTS: state.PROCESSING_EVENTS,
     getConfiguredModel,
+    getConfiguredThinkingLevel,
     getUserPrompt: () => state.currentPrompt,
     clearUserPrompt: () => { state.currentPrompt = null; },
     getPreviousResponse: () => state.processingHelper?.getPreviousResponse() || null,
@@ -1659,6 +1661,20 @@ async function getConfiguredModel(): Promise<string> {
     console.error("Error getting configured model from store:", error);
     return "gemini-2.0-flash";
   }
+}
+
+const VALID_THINKING_LEVELS = ["LOW", "MEDIUM", "HIGH"] as const;
+
+async function getConfiguredThinkingLevel(): Promise<string> {
+  try {
+    const level = await getStoreValue("gemini-thinking-level");
+    if (typeof level === "string" && (VALID_THINKING_LEVELS as readonly string[]).includes(level)) {
+      return level;
+    }
+  } catch (error) {
+    console.error("Error getting thinking level from store:", error);
+  }
+  return "MEDIUM";
 }
 
 
