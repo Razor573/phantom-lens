@@ -643,6 +643,7 @@ export class ProcessingHelper {
       const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
       const generationConfig: any = {
         maxOutputTokens: 12288,
+        temperature: 0.45,
         thinkingConfig: /^gemini-[34]/.test(model)
           ? { thinkingLevel, includeThoughts: true }
           : { includeThoughts: true },
@@ -700,6 +701,15 @@ export class ProcessingHelper {
 
       promptLines.push(
         `---`,
+        `DECISIVE REASONING & THINKING DIRECTIVES:`,
+        `When formulating thoughts and reasoning through the problem, follow these efficiency rules:`,
+        `1. Target Identification: Instantly locate the active question or focal task in the visual content. Disregard irrelevant background windows, browser tabs, or peripheral text.`,
+        `2. Forward-Only Progression: Reason strictly forward in a clear, single-pass logic chain. Do NOT loop back to second-guess established deductions or debate yourself repeatedly.`,
+        `3. One-Pass Verification: Validate facts, logic, and calculations decisively once. If an intermediate step or derivation is sound, accept it as fact and proceed immediately.`,
+        `4. Decisive Elimination: For multiple-choice questions, eliminate distractor choices with a single direct reason. Do not cycle back through rejected options unless an explicit contradiction arises.`,
+        `5. Calibrated Depth: Scale thinking depth directly to problem difficulty. Simple lookups, standard multiple choice, and familiar code patterns require fast, concise verification—never over-complicate or over-think straightforward questions.`,
+        `6. Immediate Commitment: As soon as the answer is reached, end thinking and emit the response without lingering or adding speculative caveats.`,
+        ``,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
         `CORE DIRECTIVES & RESPONSE FLOW:`,
@@ -1044,6 +1054,7 @@ export class ProcessingHelper {
       const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
       const generationConfig: any = {
         maxOutputTokens: 12288,
+        temperature: 0.45,
         thinkingConfig: /^gemini-[34]/.test(model)
           ? { thinkingLevel, includeThoughts: true }
           : { includeThoughts: true },
@@ -1103,6 +1114,15 @@ export class ProcessingHelper {
 
       promptLines.push(
         `---`,
+        `DECISIVE REASONING & THINKING DIRECTIVES:`,
+        `When formulating thoughts and reasoning through the problem, follow these efficiency rules:`,
+        `1. Target Identification: Instantly locate the active question or focal task in the visual content. Disregard irrelevant background windows, browser tabs, or peripheral text.`,
+        `2. Forward-Only Progression: Reason strictly forward in a clear, single-pass logic chain. Do NOT loop back to second-guess established deductions or debate yourself repeatedly.`,
+        `3. One-Pass Verification: Validate facts, logic, and calculations decisively once. If an intermediate step or derivation is sound, accept it as fact and proceed immediately.`,
+        `4. Decisive Elimination: For multiple-choice questions, eliminate distractor choices with a single direct reason. Do not cycle back through rejected options unless an explicit contradiction arises.`,
+        `5. Calibrated Depth: Scale thinking depth directly to problem difficulty. Simple lookups, standard multiple choice, and familiar code patterns require fast, concise verification—never over-complicate or over-think straightforward questions.`,
+        `6. Immediate Commitment: As soon as the answer is reached, end thinking and emit the response without lingering or adding speculative caveats.`,
+        ``,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
         `CORE DIRECTIVES & RESPONSE FLOW:`,
