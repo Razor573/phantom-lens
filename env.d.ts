@@ -50,7 +50,7 @@ interface Window {
     getStoreValue: (key: string) => Promise<any>;
     setStoreValue: (key: string, value: any) => Promise<void>;
     setApiConfig: (config: {
-      apiKey: string;
+      apiKey?: string;
       model: string;
       provider?: string;
       thinkingLevel?: string;
@@ -63,6 +63,10 @@ interface Window {
       success: boolean;
       data?: {
         apiKey: string;
+        geminiApiKey?: string;
+        groqApiKey?: string;
+        geminiKeySaved?: boolean;
+        groqKeySaved?: boolean;
         model: string;
         provider: string;
         thinkingLevel?: string;

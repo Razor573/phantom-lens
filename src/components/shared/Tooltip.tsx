@@ -161,6 +161,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Pasted service-account JSON key (no CLI needed). Write-only in the UI.
   const [vertexKey, setVertexKey] = useState("");
   const [vertexKeySaved, setVertexKeySaved] = useState(false);
+  const [geminiKeySaved, setGeminiKeySaved] = useState(false);
+  const [groqKeySaved, setGroqKeySaved] = useState(false);
   const [vertexTestResult, setVertexTestResult] = useState<string | null>(null);
   const [vertexTestLoading, setVertexTestLoading] = useState(false);
   // Human-readable summary of what the backend actually has saved, so the
@@ -186,6 +188,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const vertexLocationRef = useRef(vertexLocation);
   const vertexKeyRef = useRef(vertexKey);
   const vertexKeySavedRef = useRef(vertexKeySaved);
+  const geminiKeySavedRef = useRef(geminiKeySaved);
+  const groqKeySavedRef = useRef(groqKeySaved);
   const selectedModelRef = useRef(selectedModel);
   const thinkingLevelRef = useRef(thinkingLevel);
   const webSearchRef = useRef(webSearch);
@@ -210,6 +214,12 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   useEffect(() => {
     vertexKeySavedRef.current = vertexKeySaved;
   }, [vertexKeySaved]);
+  useEffect(() => {
+    geminiKeySavedRef.current = geminiKeySaved;
+  }, [geminiKeySaved]);
+  useEffect(() => {
+    groqKeySavedRef.current = groqKeySaved;
+  }, [groqKeySaved]);
   useEffect(() => {
     webSearchRef.current = webSearch;
   }, [webSearch]);
@@ -353,16 +363,32 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (configData.vertexProject) setVertexProject(configData.vertexProject);
         setVertexLocation(configData.vertexLocation || "global");
         setVertexKeySaved(!!configData.vertexKeySaved);
+
+        if (configData.geminiApiKey) {
+          setApiKey(configData.geminiApiKey);
+          setGeminiKeySaved(true);
+        } else if (configData.apiKey && prov === "gemini") {
+          setApiKey(configData.apiKey);
+          setGeminiKeySaved(true);
+        } else {
+          setGeminiKeySaved(Boolean(configData.geminiKeySaved));
+        }
+
+        if (configData.groqApiKey) {
+          setGroqApiKey(configData.groqApiKey);
+          setGroqKeySaved(true);
+        } else if (configData.apiKey && prov === "groq") {
+          setGroqApiKey(configData.apiKey);
+          setGroqKeySaved(true);
+        } else {
+          setGroqKeySaved(Boolean(configData.groqKeySaved));
+        }
+
         if (prov === "vertex") {
           setActiveConfigSummary(
             `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""} · key ${configData.vertexKeySaved ? "saved" : "missing - paste it below"}${configData.webSearch ? " · web search on" : ""}`.trim()
           );
         } else {
-          if (configData.apiKey) {
-            console.log("Setting API key from config");
-            if (prov === "groq") setGroqApiKey(configData.apiKey);
-            else setApiKey(configData.apiKey);
-          }
           setActiveConfigSummary(
             `${prov === "groq" ? "Groq" : "Gemini"} API · ${configData.model || ""}${configData.webSearch && prov !== "groq" ? " · web search on" : ""}`.trim()
           );
@@ -377,8 +403,13 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         setWebSearch(configData.webSearch === true);
         if (prov === "vertex") {
           await refreshModelList(undefined, configData.model, prov);
-        } else if (configData.apiKey) {
-          await refreshModelList(configData.apiKey, configData.model, prov);
+        } else {
+          const activeKey = prov === "groq"
+            ? (configData.groqApiKey || (prov === "groq" ? configData.apiKey : ""))
+            : (configData.geminiApiKey || (prov === "gemini" ? configData.apiKey : ""));
+          if (activeKey) {
+            await refreshModelList(activeKey, configData.model, prov);
+          }
         }
       } else {
         console.log("No API config found or response unsuccessful:", response);
@@ -503,17 +534,33 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       refreshModelList(undefined, keep, p);
       return;
     }
-    const key = (p === "groq" ? groqApiKeyRef.current : apiKeyRef.current).trim();
-    if (key) {
-      refreshModelList(key, selectedModelRef.current, p);
-    } else {
-      const presets = p === "groq" ? GROQ_MODEL_OPTIONS : MODEL_OPTIONS;
-      const keep = selectedModelRef.current.trim();
-      setAvailableModels(
-        presets.some((m) => m.id === keep)
-          ? presets
-          : [...presets, { id: keep, name: keep, description: "Currently configured model" }]
-      );
+    if (p === "gemini") {
+      if (apiKeyRef.current.trim()) {
+        refreshModelList(apiKeyRef.current.trim(), selectedModelRef.current, "gemini");
+      } else {
+        const presets = MODEL_OPTIONS;
+        const keep = selectedModelRef.current.trim();
+        setAvailableModels(
+          presets.some((m) => m.id === keep)
+            ? presets
+            : [...presets, { id: keep, name: keep, description: "Currently configured model" }]
+        );
+      }
+      return;
+    }
+    if (p === "groq") {
+      if (groqApiKeyRef.current.trim()) {
+        refreshModelList(groqApiKeyRef.current.trim(), selectedModelRef.current, "groq");
+      } else {
+        const presets = GROQ_MODEL_OPTIONS;
+        const keep = selectedModelRef.current.trim();
+        setAvailableModels(
+          presets.some((m) => m.id === keep)
+            ? presets
+            : [...presets, { id: keep, name: keep, description: "Currently configured model" }]
+        );
+      }
+      return;
     }
   }, [refreshModelList]);
 
@@ -1258,26 +1305,35 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                     </>
                   ) : (
                   <div>
-                  <label className="block text-xs text-white/70 mb-1 text-center">{provider === "groq" ? "Groq API Key" : "Gemini API Key"}</label>
-                  <input
+                    <label className="block text-xs text-white/70 mb-1 text-center">{provider === "groq" ? "Groq API Key" : "Gemini API Key"}</label>
+                    <input
                       ref={apiKeyInputRef}
                       type="password"
                       value={provider === "groq" ? groqApiKey : apiKey}
-                    onChange={(e) => {
-                      if (!isInteractive) return;
-                      if (provider === "groq") setGroqApiKey(e.target.value);
-                      else setApiKey(e.target.value);
-                    }}
-                    disabled={!isInteractive}
-                    tabIndex={isInteractive ? 0 : -1}
-                    placeholder={provider === "groq" ? "gsk_..." : "AIza..."}
-                    className={`w-full px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
-                      isInteractive 
-                        ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20' 
-                        : 'cursor-default'
-                    }`}
-                    style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                      onChange={(e) => {
+                        if (!isInteractive) return;
+                        if (provider === "groq") setGroqApiKey(e.target.value);
+                        else setApiKey(e.target.value);
+                      }}
+                      disabled={!isInteractive}
+                      tabIndex={isInteractive ? 0 : -1}
+                      placeholder={
+                        provider === "groq"
+                          ? (groqKeySaved ? "Key saved - paste a new one here to replace it" : "gsk_...")
+                          : (geminiKeySaved ? "Key saved - paste a new one here to replace it" : "AIza...")
+                      }
+                      className={`w-full px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                        isInteractive 
+                          ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20' 
+                          : 'cursor-default'
+                      }`}
+                      style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                     />
+                    {((provider === "gemini" && geminiKeySaved) || (provider === "groq" && groqKeySaved)) && (
+                      <p className="text-[11px] text-green-400/80 mt-1 text-center">
+                        ✓ API key saved in backend
+                      </p>
+                    )}
                   </div>
                   )}
                   <div>

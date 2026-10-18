@@ -90,30 +90,33 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         (await getStoreValue("vertex-location")) ||
         process.env.VERTEX_LOCATION ||
         "global";
-      const vertexKeySaved = !!((await getStoreValue("vertex-service-account")) || "");
       const webSearch = (await getStoreValue("web-search")) === true;
 
-      // Vertex AI uses gcloud ADC instead of an API key: project + location.
-      if (provider === "vertex") {
-        if (!vertexProject) {
-          return { success: false, error: "Vertex AI project not configured" };
-        }
-        return {
-          success: true,
-          data: { apiKey: "", model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved, webSearch }
-        };
-      }
+      const geminiApiKey = ((await getStoreValue("api-key")) as string) || "";
+      const groqApiKey = ((await getStoreValue("groq-api-key")) as string) || "";
+      const vertexServiceAccount = ((await getStoreValue("vertex-service-account")) as string) || "";
+      const geminiKeySaved = !!geminiApiKey;
+      const groqKeySaved = !!groqApiKey;
+      const vertexKeySaved = !!vertexServiceAccount;
 
-      const keyName = provider === "groq" ? "groq-api-key" : "api-key";
-      const apiKey = await getStoreValue(keyName);
-
-      if (!apiKey) {
-        return { success: false, error: "API key not found" };
-      }
+      const apiKey = provider === "groq" ? groqApiKey : provider === "vertex" ? "" : geminiApiKey;
 
       return {
         success: true,
-        data: { apiKey, model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved, webSearch }
+        data: {
+          apiKey,
+          geminiApiKey,
+          groqApiKey,
+          geminiKeySaved,
+          groqKeySaved,
+          vertexKeySaved,
+          model,
+          provider,
+          thinkingLevel,
+          vertexProject,
+          vertexLocation,
+          webSearch
+        }
       };
     } catch (error: any) {
       console.error("Error getting API config:", error);
@@ -123,7 +126,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("set-api-config", createSafeIpcHandler(async (
     _event: any,
-    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string; webSearch?: boolean }
+    config: { apiKey?: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string; webSearch?: boolean }
   ) => {
     try {
       const { apiKey, model } = config;
@@ -187,15 +190,41 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
           mainWindow.webContents.send("api-key-updated");
         }
         const vertexKeySaved = pastedKey ? true : !!((await getStoreValue("vertex-service-account")) || "");
+        const geminiApiKey = ((await getStoreValue("api-key")) as string) || "";
+        const groqApiKey = ((await getStoreValue("groq-api-key")) as string) || "";
+        const geminiKeySaved = !!geminiApiKey;
+        const groqKeySaved = !!groqApiKey;
+
         console.log(`API configuration saved: Provider=vertex, Model=${model.trim()}, Project=${vertexProject}`);
-        return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject, vertexLocation, vertexKeySaved, webSearch } };
+        return {
+          success: true,
+          data: {
+            apiKey: "***",
+            geminiApiKey,
+            groqApiKey,
+            geminiKeySaved,
+            groqKeySaved,
+            model: model.trim(),
+            provider,
+            thinkingLevel,
+            vertexProject,
+            vertexLocation,
+            vertexKeySaved,
+            webSearch
+          }
+        };
       }
 
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
+      const existingStoredKey = ((await getStoreValue(keyName)) as string) || "";
+      const newKey = typeof apiKey === "string" ? apiKey.trim() : "";
+      const effectiveApiKey = (newKey && newKey !== "***") ? newKey : existingStoredKey;
 
-      // Enhanced validation
-      if (!apiKey || typeof apiKey !== "string" || !apiKey.trim()) {
-        return { success: false, error: "Invalid API key provided" };
+      if (!effectiveApiKey) {
+        return {
+          success: false,
+          error: `Invalid ${provider === "groq" ? "Groq" : "Gemini"} API key provided`
+        };
       }
 
       if (!model || typeof model !== "string" || !model.trim()) {
@@ -207,21 +236,21 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         ? config.thinkingLevel!
         : "MEDIUM";
 
-      // Any non-empty model id is accepted - the provider API itself
-      // validates whether the key has access to the requested model.
-
       // Store the configuration (keys are kept per-provider so switching
       // providers never loses the other provider's key)
       const webSearch = config.webSearch === true;
-      const [successKey, successModel, successProvider, successThinking, successWebSearch] = await Promise.all([
-        setStoreValue(keyName, apiKey.trim()),
+      const saves: Promise<boolean>[] = [
         setStoreValue("api-model", model.trim()),
         setStoreValue("api-provider", provider),
         setStoreValue("gemini-thinking-level", thinkingLevel),
         setStoreValue("web-search", webSearch)
-      ]);
+      ];
+      if (newKey && newKey !== "***") {
+        saves.push(setStoreValue(keyName, effectiveApiKey));
+      }
 
-      if (!successKey || !successModel || !successProvider || !successThinking || !successWebSearch) {
+      const results = await Promise.all(saves);
+      if (results.some((r) => !r)) {
         console.error("Failed to save one or more API config values to store.");
         return {
           success: false,
@@ -230,7 +259,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       }
 
       // Set environment variables
-      process.env.API_KEY = apiKey.trim();
+      process.env.API_KEY = effectiveApiKey;
       process.env.API_MODEL = model.trim();
       process.env.API_PROVIDER = provider;
 
@@ -240,8 +269,30 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         mainWindow.webContents.send("api-key-updated");
       }
 
+      const geminiApiKey = provider === "gemini" ? effectiveApiKey : (((await getStoreValue("api-key")) as string) || "");
+      const groqApiKey = provider === "groq" ? effectiveApiKey : (((await getStoreValue("groq-api-key")) as string) || "");
+      const geminiKeySaved = !!geminiApiKey;
+      const groqKeySaved = !!groqApiKey;
+      const vertexKeySaved = !!((await getStoreValue("vertex-service-account")) || "");
+
       console.log(`API configuration saved: Model=${model.trim()}`);
-      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject: "", vertexLocation: "", vertexKeySaved: false, webSearch } };
+      return {
+        success: true,
+        data: {
+          apiKey: "***",
+          geminiApiKey,
+          groqApiKey,
+          geminiKeySaved,
+          groqKeySaved,
+          model: model.trim(),
+          provider,
+          thinkingLevel,
+          vertexProject: "",
+          vertexLocation: "",
+          vertexKeySaved,
+          webSearch
+        }
+      };
       
     } catch (error: any) {
       console.error("Error setting API configuration:", error);
