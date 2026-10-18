@@ -525,14 +525,27 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         return;
       }
       const n = listRes.data.models.length;
-      // Now prove the selected model actually responds.
-      setVertexTestResult(`Connected - testing ${model || "model"}...`);
-      const predRes = await window.electronAPI.testVertexPrediction({ key, projectId, location, model });
-      if (predRes?.success && predRes.data) {
-        setVertexTestResult(`Connected - ${model} answered: "${predRes.data.reply}"`);
-      } else {
-        setVertexTestResult(`Catalogue OK (${n} model${n === 1 ? "" : "s"}), but ${model || "model"} failed: ${predRes?.error || "unknown error"}`);
+      // Test the selected model, but ALSO try the first live-listed model.
+      // If the live one works and the selected doesn't, it's a model ID issue.
+      // If neither works, it's a fundamental API/project issue.
+      const liveModel = listRes.data.models[0]?.id;
+      const modelsToTest = [...new Set([model, liveModel].filter(Boolean))];
+      let results: string[] = [];
+      for (const m of modelsToTest) {
+        setVertexTestResult(`Connected - testing ${m}...`);
+        const predRes = await window.electronAPI.testVertexPrediction({ key, projectId, location, model: m });
+        if (predRes?.success && predRes.data) {
+          results.push(`${m} answered: "${predRes.data.reply}"`);
+        } else {
+          results.push(`${m} failed: ${predRes?.error || "unknown error"}`);
+        }
       }
+      const allOk = results.every(r => r.includes("answered"));
+      setVertexTestResult(
+        allOk
+          ? `Connected - ${results.join("; ")}`
+          : `Catalogue OK (${n} model${n === 1 ? "" : "s"}). ${results.join("; ")}`
+      );
     } catch (err: any) {
       setVertexTestResult(`Failed: ${err?.message || "unknown error"}`);
     } finally {
