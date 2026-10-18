@@ -113,7 +113,11 @@ export class VertexAIService {
     // location in the path - the project goes in x-goog-user-project.
     // (docs: publishers.models.list is v1beta1-only -
     // GET /v1beta1/publishers/{publisher}/models)
-    const url = `https://${location}-aiplatform.googleapis.com/v1beta1/publishers/google/models`;
+    // listAllVersions=true: without it the API returns a small default set
+    // (no Argon, no older Flash versions).
+    const url =
+      `https://${location}-aiplatform.googleapis.com/v1beta1/publishers/google/models` +
+      `?listAllVersions=true&pageSize=100`;
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
