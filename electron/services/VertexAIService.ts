@@ -167,12 +167,6 @@ export class VertexAIService {
   }): AsyncGenerator<string> {
     const token = await this.getAccessToken();
     const modelId = opts.model.replace(/^publishers\/google\/models\//, "");
-    const url =
-      `https://${opts.location}-aiplatform.googleapis.com/v1` +
-      `/projects/${encodeURIComponent(opts.projectId)}` +
-      `/locations/${encodeURIComponent(opts.location)}` +
-      `/publishers/google/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
-
     const parts: any[] = [{ text: opts.prompt }];
     for (const img of opts.base64Images) {
       parts.push({ inlineData: { mimeType: "image/png", data: img } });
@@ -186,27 +180,49 @@ export class VertexAIService {
     if (opts.thinkingLevel && /^gemini-[34]/.test(modelId)) {
       generationConfig.thinkingConfig = { thinkingLevel: opts.thinkingLevel };
     }
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts }],
-        generationConfig,
-        // Google Search grounding: the model can search the live web.
-        // Billed per search query (5k free/month on Gemini 3.x, then $14/1k).
-        ...(opts.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
-      }),
-      signal: opts.signal,
+    const body = JSON.stringify({
+      contents: [{ role: "user", parts }],
+      generationConfig,
+      // Google Search grounding: the model can search the live web.
+      // Billed per search query (5k free/month on Gemini 3.x, then $14/1k).
+      ...(opts.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
     });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
+
+    // Try the configured region first, then fall back to us-central1
+    // (Google's primary region - some models aren't in every region yet).
+    const locations = [opts.location];
+    if (opts.location !== "us-central1") locations.push("us-central1");
+    let res: Response | null = null;
+    let lastError = "";
+    for (const loc of locations) {
+      // v1beta1 for prediction (v1 404s on the publishers path for some
+      // regions; v1beta1 is the documented publishers.models path).
+      const url =
+        `https://${loc}-aiplatform.googleapis.com/v1beta1` +
+        `/projects/${encodeURIComponent(opts.projectId)}` +
+        `/locations/${encodeURIComponent(loc)}` +
+        `/publishers/google/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body,
+        signal: opts.signal,
+      });
+      if (res.ok) break;
+      const errBody = await res.text().catch(() => "");
       if (res.status === 401) this.clearToken();
-      throw new Error(
-        `Vertex AI request failed (HTTP ${res.status}): ${body.slice(0, 300)}`
-      );
+      lastError = `Vertex AI request failed (HTTP ${res.status}): ${errBody.slice(0, 300)}`;
+      // Only retry on 404 (model not in region); other errors are real.
+      if (res.status !== 404) {
+        throw new Error(lastError);
+      }
+      res = null; // try next region
+    }
+    if (!res || !res.ok) {
+      throw new Error(lastError || "Vertex AI request failed in all regions");
     }
 
     const reader = res.body!.getReader();
