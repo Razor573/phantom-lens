@@ -8,6 +8,14 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
+import { sanitizeLatex } from "@/utils/sanitizeLatex";
+
+// KaTeX overlap fix: fractions and tall math can collide with surrounding
+// text when the container's line-height is tight. Give KaTeX output room.
+const katexFixStyle = `
+  .katex-display { margin: 0.5em 0; overflow-x: auto; overflow-y: hidden; }
+  .katex { line-height: 1.2; }
+`;
 
 // Hook to track transparency mode
 function useTransparencyMode() {
@@ -53,6 +61,7 @@ export const MarkdownSection = ({
 
   return (
     <div className="space-y-2">
+      <style>{katexFixStyle}</style>
       {isLoading && !content ? (
         // <p className="text-xs text-muted-foreground animate-pulse">
         //   Generating response...
@@ -183,7 +192,7 @@ export const MarkdownSection = ({
               },
             }}
           >
-            {content}
+            {sanitizeLatex(content)}
           </ReactMarkdown>
         </div>
       ) : null}
