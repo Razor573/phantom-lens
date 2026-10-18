@@ -239,7 +239,7 @@ export class VertexAIService {
     const generationConfig: any = {
       candidateCount: 1,
       maxOutputTokens: 12288,
-      temperature: 0.45,
+      temperature: 0.2,
     };
     if (opts.thinkingLevel && /^gemini-[34]/.test(modelId)) {
       generationConfig.thinkingConfig = {

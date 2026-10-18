@@ -643,7 +643,7 @@ export class ProcessingHelper {
       const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
       const generationConfig: any = {
         maxOutputTokens: 12288,
-        temperature: 0.45,
+        temperature: 0.2,
         thinkingConfig: /^gemini-[34]/.test(model)
           ? { thinkingLevel, includeThoughts: true }
           : { includeThoughts: true },
@@ -701,21 +701,20 @@ export class ProcessingHelper {
 
       promptLines.push(
         `---`,
-        `STRUCTURED & DISCIPLINED REASONING DIRECTIVES:`,
-        `When formulating thoughts and reasoning through the problem, follow this structured verification workflow:`,
-        `1. Stage 1 — Direct Deduction:`,
-        `   - Instantly locate the active question or focal task in the visual content, ignoring background windows and browser chrome.`,
-        `   - Work through the logic, code, or mathematics to establish your primary working answer and rationale.`,
-        `2. Stage 2 — Rigorous Confirmation & Sanity-Check:`,
-        `   - Do not "look once and forget"—actively confirm and pressure-test your working answer before committing.`,
-        `   - Check for negative phrasing (NOT, EXCEPT, LEAST), edge cases, units, or tricky wording.`,
-        `   - For multiple-choice: compare your leading choice directly against the closest runner-up distractor to confirm why yours is strictly superior.`,
-        `   - For code/math: perform a quick mental dry-run or boundary check.`,
-        `3. Stage 3 — Decisive Convergence (Anti-Looping):`,
-        `   - Verification must be purposeful, not circular: confirm methodically, but avoid endless second-guessing or restarting analysis from scratch.`,
-        `   - If your confirmation check passes, converge decisively and output the final response.`,
-        `   - If a concrete flaw is discovered during verification, correct it decisively, verify the correction once, and proceed immediately.`,
-        `   - Calibrate time appropriately: straightforward questions and clear multiple-choice need only a concise sanity check, while complex multi-step problems warrant a deeper multi-check.`,
+        `COMPREHENSIVE REASONING & RIGOROUS VERIFICATION DIRECTIVES:`,
+        `When formulating thoughts and reasoning through the problem, prioritize absolute mathematical, logical, and factual accuracy above all else:`,
+        `1. Complete Analytical & Mathematical Rigor:`,
+        `   - Never rush, approximate, or omit intermediate steps. Accuracy is paramount.`,
+        `   - For math, science, and quantitative problems: write out explicit, full step-by-step derivations. Calculate every intermediate value cleanly. Verify all signs, arithmetic operations, algebraic transformations, formulas, units, and boundary conditions.`,
+        `   - For coding: thoroughly trace execution flow, state mutations, complexity, and critical edge cases (null/empty inputs, bounds, off-by-one errors).`,
+        `   - For multiple-choice & reading comprehension: scrutinize the exact wording, condition qualifiers (e.g. NOT, EXCEPT, LEAST, ALWAYS), and thoroughly verify why the chosen option is definitively correct and why all other options are eliminated.`,
+        `2. Multi-Pass Solution Verification:`,
+        `   - Take multiple verification passes before finalizing: actively pressure-test your answer against the visual evidence and problem statement.`,
+        `   - Double-check arithmetic by calculating from an alternate direction or plugging the result back into original equations.`,
+        `   - If an inconsistency or error is detected, systematically resolve the discrepancy and re-verify the corrected result.`,
+        `3. Systematic Forward Progression (Anti-Looping):`,
+        `   - Deep, thorough thinking is required, but remain systematic and purposeful. Do not cycle in aimless self-doubt or repeat identical considerations without making progress.`,
+        `   - Once each derivation step is mathematically and logically validated, build forward upon it with complete confidence.`,
         ``,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
@@ -736,10 +735,10 @@ export class ProcessingHelper {
         `8. Use topic-specific \`##\` or \`###\` headings ONLY when a complex answer genuinely needs sections—never use generic labels like "# Analysis" or "# Summary".`,
         ``,
         `DOMAIN ADAPTATION:`,
-        `- Coding: Complete code block under **Answer**, essential notes/complexity under **Explanation**.`,
-        `- Math/Logic: Final bolded result under **Answer**, step-by-step derivation under **Explanation**.`,
-        `- Law/Medicine/Sciences: Core conclusion/assessment under **Answer**, criteria/differentials under **Explanation**.`,
-        `- Multiple Choice: Correct option letter/text in bold under **Answer**, justification under **Explanation**.`
+        `- Coding: Complete, verified code block under **Answer**, thorough breakdown and edge cases under **Explanation**.`,
+        `- Math/Logic: Final bolded result under **Answer**, complete step-by-step mathematical derivation showing all work under **Explanation**.`,
+        `- Law/Medicine/Sciences: Core conclusion/assessment under **Answer**, criteria, evidence, and differentials under **Explanation**.`,
+        `- Multiple Choice: Correct option letter/text in bold under **Answer**, complete justification of the winning choice and explicit elimination of distractors under **Explanation**.`
       );
       const prompt = promptLines.join("\n");
 
@@ -1061,7 +1060,7 @@ export class ProcessingHelper {
       const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
       const generationConfig: any = {
         maxOutputTokens: 12288,
-        temperature: 0.45,
+        temperature: 0.2,
         thinkingConfig: /^gemini-[34]/.test(model)
           ? { thinkingLevel, includeThoughts: true }
           : { includeThoughts: true },
@@ -1121,21 +1120,20 @@ export class ProcessingHelper {
 
       promptLines.push(
         `---`,
-        `STRUCTURED & DISCIPLINED REASONING DIRECTIVES:`,
-        `When formulating thoughts and reasoning through the problem, follow this structured verification workflow:`,
-        `1. Stage 1 — Direct Deduction:`,
-        `   - Instantly locate the active question or focal task in the visual content, ignoring background windows and browser chrome.`,
-        `   - Work through the logic, code, or mathematics to establish your primary working answer and rationale.`,
-        `2. Stage 2 — Rigorous Confirmation & Sanity-Check:`,
-        `   - Do not "look once and forget"—actively confirm and pressure-test your working answer before committing.`,
-        `   - Check for negative phrasing (NOT, EXCEPT, LEAST), edge cases, units, or tricky wording.`,
-        `   - For multiple-choice: compare your leading choice directly against the closest runner-up distractor to confirm why yours is strictly superior.`,
-        `   - For code/math: perform a quick mental dry-run or boundary check.`,
-        `3. Stage 3 — Decisive Convergence (Anti-Looping):`,
-        `   - Verification must be purposeful, not circular: confirm methodically, but avoid endless second-guessing or restarting analysis from scratch.`,
-        `   - If your confirmation check passes, converge decisively and output the final response.`,
-        `   - If a concrete flaw is discovered during verification, correct it decisively, verify the correction once, and proceed immediately.`,
-        `   - Calibrate time appropriately: straightforward questions and clear multiple-choice need only a concise sanity check, while complex multi-step problems warrant a deeper multi-check.`,
+        `COMPREHENSIVE REASONING & RIGOROUS VERIFICATION DIRECTIVES:`,
+        `When formulating thoughts and reasoning through the problem, prioritize absolute mathematical, logical, and factual accuracy above all else:`,
+        `1. Complete Analytical & Mathematical Rigor:`,
+        `   - Never rush, approximate, or omit intermediate steps. Accuracy is paramount.`,
+        `   - For math, science, and quantitative problems: write out explicit, full step-by-step derivations. Calculate every intermediate value cleanly. Verify all signs, arithmetic operations, algebraic transformations, formulas, units, and boundary conditions.`,
+        `   - For coding: thoroughly trace execution flow, state mutations, complexity, and critical edge cases (null/empty inputs, bounds, off-by-one errors).`,
+        `   - For multiple-choice & reading comprehension: scrutinize the exact wording, condition qualifiers (e.g. NOT, EXCEPT, LEAST, ALWAYS), and thoroughly verify why the chosen option is definitively correct and why all other options are eliminated.`,
+        `2. Multi-Pass Solution Verification:`,
+        `   - Take multiple verification passes before finalizing: actively pressure-test your answer against the visual evidence and problem statement.`,
+        `   - Double-check arithmetic by calculating from an alternate direction or plugging the result back into original equations.`,
+        `   - If an inconsistency or error is detected, systematically resolve the discrepancy and re-verify the corrected result.`,
+        `3. Systematic Forward Progression (Anti-Looping):`,
+        `   - Deep, thorough thinking is required, but remain systematic and purposeful. Do not cycle in aimless self-doubt or repeat identical considerations without making progress.`,
+        `   - Once each derivation step is mathematically and logically validated, build forward upon it with complete confidence.`,
         ``,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
@@ -1156,10 +1154,10 @@ export class ProcessingHelper {
         `8. Use topic-specific \`##\` or \`###\` headings ONLY when a complex answer genuinely needs sections—never use generic labels like "# Analysis" or "# Summary".`,
         ``,
         `DOMAIN ADAPTATION:`,
-        `- Coding: Complete code block under **Answer**, essential notes/complexity under **Explanation**.`,
-        `- Math/Logic: Final bolded result under **Answer**, step-by-step derivation under **Explanation**.`,
-        `- Law/Medicine/Sciences: Core conclusion/assessment under **Answer**, criteria/differentials under **Explanation**.`,
-        `- Multiple Choice: Correct option letter/text in bold under **Answer**, justification under **Explanation**.`,
+        `- Coding: Complete, verified code block under **Answer**, thorough breakdown and edge cases under **Explanation**.`,
+        `- Math/Logic: Final bolded result under **Answer**, complete step-by-step mathematical derivation showing all work under **Explanation**.`,
+        `- Law/Medicine/Sciences: Core conclusion/assessment under **Answer**, criteria, evidence, and differentials under **Explanation**.`,
+        `- Multiple Choice: Correct option letter/text in bold under **Answer**, complete justification of the winning choice and explicit elimination of distractors under **Explanation**.`,
         ``,
         `Build directly upon the previous conversation context without repeating prior explanations.`
       );
