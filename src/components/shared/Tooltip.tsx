@@ -170,6 +170,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const vertexProjectRef = useRef(vertexProject);
   const vertexLocationRef = useRef(vertexLocation);
   const vertexKeyRef = useRef(vertexKey);
+  const vertexKeySavedRef = useRef(vertexKeySaved);
   const selectedModelRef = useRef(selectedModel);
   const thinkingLevelRef = useRef(thinkingLevel);
   useEffect(() => {
@@ -190,6 +191,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   useEffect(() => {
     vertexKeyRef.current = vertexKey;
   }, [vertexKey]);
+  useEffect(() => {
+    vertexKeySavedRef.current = vertexKeySaved;
+  }, [vertexKeySaved]);
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
@@ -321,7 +325,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           if (configData.vertexLocation) setVertexLocation(configData.vertexLocation);
           setVertexKeySaved(!!configData.vertexKeySaved);
           setActiveConfigSummary(
-            `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""}`.trim()
+            `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""} · key ${configData.vertexKeySaved ? "saved" : "missing - paste it below"}`.trim()
           );
         } else {
           if (configData.apiKey) {
@@ -517,8 +521,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (provider === "vertex") setVertexKey("");
         // Update the "currently using" line immediately from what we saved.
         if (provider === "vertex") {
+          const keyNowSaved = !!vertexKeyRef.current.trim() || vertexKeySavedRef.current;
           setActiveConfigSummary(
-            `Vertex AI · ${vertexProjectRef.current || "no project"} · ${selectedModel}`.trim()
+            `Vertex AI · ${vertexProjectRef.current || "no project"} · ${selectedModel} · key ${keyNowSaved ? "saved" : "missing - paste it below"}`.trim()
           );
         } else {
           setActiveConfigSummary(
