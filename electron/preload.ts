@@ -27,6 +27,9 @@ interface ElectronAPI {
   onResponseSuccess: (callback: (data: any) => void) => () => void;
   onFollowUpError: (callback: (error: string) => void) => () => void;
   onResponseChunk: (callback: (chunk: string) => void) => () => void;
+  onResponseThinkingChunk: (
+    callback: (data: { thinking: string } | string) => void
+  ) => () => void;
   onFollowUpChunk: (callback: (data: { response: string }) => void) => () => void;
   // shortcuts
   toggleMainWindow: () => Promise<{ success: boolean; error?: string }>;
@@ -204,6 +207,7 @@ export const PROCESSING_EVENTS = {
   INITIAL_RESPONSE_ERROR: "response-error",
   RESET: "reset",
   RESPONSE_CHUNK: "response-chunk",
+  RESPONSE_THINKING_CHUNK: "response-thinking-chunk",
 
   // states for processing the debugging
   FOLLOW_UP_START: "follow-up-start",
@@ -439,6 +443,19 @@ const electronAPI = {
     return () => {
       ipcRenderer.removeListener(
         PROCESSING_EVENTS.RESPONSE_CHUNK,
+        subscription
+      );
+    };
+  },
+  onResponseThinkingChunk: (
+    callback: (data: { thinking: string } | string) => void
+  ) => {
+    const subscription = (_: any, data: { thinking: string } | string) =>
+      callback(data);
+    ipcRenderer.on(PROCESSING_EVENTS.RESPONSE_THINKING_CHUNK, subscription);
+    return () => {
+      ipcRenderer.removeListener(
+        PROCESSING_EVENTS.RESPONSE_THINKING_CHUNK,
         subscription
       );
     };

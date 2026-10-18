@@ -28,6 +28,9 @@ interface Window {
     onResponseSuccess: (callback: (data: any) => void) => () => void;
     onFollowUpError: (callback: (error: string) => void) => () => void;
     onResponseChunk: (callback: (chunk: string) => void) => () => void;
+    onResponseThinkingChunk: (
+      callback: (data: { thinking: string } | string) => void
+    ) => () => void;
     onFollowUpChunk: (callback: (data: { response: string }) => void) => () => void;
     // shortcuts
     toggleMainWindow: () => Promise<{ success: boolean; error?: string }>;

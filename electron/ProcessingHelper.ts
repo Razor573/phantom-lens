@@ -94,7 +94,8 @@ export class ProcessingHelper {
     stream: AsyncIterable<any>,
     onChunk: (chunkText: string) => void,
     signal: AbortSignal,
-    timeoutMs: number = 100_000
+    timeoutMs: number = 100_000,
+    onThought?: (thoughtText: string) => void
   ): Promise<void> {
     let timer: NodeJS.Timeout | null = null;
     try {
@@ -102,6 +103,32 @@ export class ProcessingHelper {
         (async () => {
           for await (const chunk of stream) {
             if (signal.aborted) throw new Error("Request aborted");
+            if (
+              chunk &&
+              typeof chunk === "object" &&
+              "type" in chunk &&
+              "content" in chunk
+            ) {
+              if (chunk.type === "thought" && chunk.content) {
+                onThought?.(chunk.content);
+              } else if (chunk.type === "text" && chunk.content) {
+                onChunk(chunk.content);
+              }
+              continue;
+            }
+            const parts: Array<{ text?: string; thought?: boolean }> | undefined =
+              chunk?.candidates?.[0]?.content?.parts;
+            if (Array.isArray(parts)) {
+              for (const part of parts) {
+                if (!part?.text) continue;
+                if (part.thought) {
+                  onThought?.(part.text);
+                } else {
+                  onChunk(part.text);
+                }
+              }
+              continue;
+            }
             const chunkText =
               typeof chunk === "string"
                 ? chunk
@@ -158,14 +185,14 @@ export class ProcessingHelper {
   /**
    * Vertex AI streaming via Application Default Credentials
    * (`gcloud auth application-default login` on the user's machine).
-   * Yields { text() } chunks; project/location come from settings.
+   * Yields { type: "thought" | "text", content: string } chunks; project/location come from settings.
    */
   private async *streamVertexChatCompletion(
     signal: AbortSignal,
     model: string,
     prompt: string,
     base64Images: string[]
-  ): AsyncGenerator<{ text: () => string }> {
+  ): AsyncGenerator<{ type: "thought" | "text"; content: string }> {
     const projectId = (
       process.env.VERTEX_PROJECT ||
       vertexAIService.getProjectIdFromKey() ||
@@ -190,7 +217,7 @@ export class ProcessingHelper {
       webSearch,
       signal,
     })) {
-      yield { text: () => chunk };
+      yield chunk;
     }
   }
 
@@ -613,19 +640,19 @@ export class ProcessingHelper {
       const geminiModelId = model.startsWith("gemini-")
         ? `models/${model}`
         : model;
-      // thinkingLevel is only valid for Gemini 3 models (2.5 uses thinkingBudget).
-      // The legacy SDK doesn't type thinkingConfig, so it's passed untyped -
-      // at runtime it's plain JSON in the request body.
       const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
-      const generationConfig = /^gemini-3/.test(model)
-        ? ({ thinkingConfig: { thinkingLevel } } as any)
-        : undefined;
+      const generationConfig: any = {
+        maxOutputTokens: 12288,
+        thinkingConfig: /^gemini-[34]/.test(model)
+          ? { thinkingLevel, includeThoughts: true }
+          : { includeThoughts: true },
+      };
       // Google Search grounding: off by default (billed per search query).
       // Passed untyped like thinkingConfig - plain JSON at runtime.
       const webSearch = (await this.deps.getWebSearchEnabled?.()) || false;
       const geminiModel = genAI.getGenerativeModel({
         model: geminiModelId,
-        ...(generationConfig ? { generationConfig } : {}),
+        generationConfig,
         ...(webSearch ? { tools: [{ googleSearch: {} }] as any } : {}),
       });
 
@@ -675,21 +702,28 @@ export class ProcessingHelper {
         `---`,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
-        `# Analysis`,
-        `If audio is provided, briefly reference what you hear and how it relates to the visual content. Keep this extremely brief and focus on your solution approach. One or two sentences maximum.`,
+        `CORE DIRECTIVES & RESPONSE FLOW:`,
+        `Unless the user explicitly requests a different format, structure every response in this exact 3-part flow:`,
+        `1. **Question:** A single, concise 1-line restatement of the detected question or task so the user knows you read the right target.`,
+        `2. **Answer:** Immediately provide the direct final answer, verdict, or solution (e.g., the exact multiple-choice option, final math value, direct conclusion, or complete code block).`,
+        `3. **Explanation:** Provide a clear, structured breakdown explaining *why* the answer is correct, how the code/math works, or why other options are ruled out.`,
         ``,
-        `# Solution`,
-        `Provide the direct solution based on both visual and audio content. Use standard Markdown. If code is necessary, use appropriate code blocks. Do not describe the task itself.`,
-        `IMPORTANT: When adding code blocks, use triple backticks WITH the language specifier. Use \`\`\`language\\ncode here\\n\`\`\`.`,
+        `STRICT READABILITY & FORMATTING RULES:`,
+        `1. Break the answer into short paragraphs separated by blank lines—never write one long unbroken block of text.`,
+        `2. Use bullet or numbered lists for steps, options, or multiple points.`,
+        `3. Keep lines reasonably concise so text fits a narrow window without horizontal scrolling.`,
+        `4. Write ALL math as plain Unicode text (×, ÷, →, ⟹, ≤, ≥, ², ₂, ≠, ±, −) typed directly. NEVER use LaTeX backslash commands (\\times, \\frac, \\text, \\sqrt, \\%) outside of $...$ equations.`,
+        `5. Never wrap plain values in dollar signs. $18,000, 52ms, 3.0% must stay as plain text ($18,000, 52ms), NOT $$18,000$$ or $52\\text{ms}$.`,
+        `6. Only use $...$ or $$...$$ for genuinely complex multi-step equations, and keep those simple.`,
+        `7. Never use raw HTML tags (<p>, <br>, <b>) or wrap regular prose/LaTeX inside code blocks.`,
+        `8. Use topic-specific \`##\` or \`###\` headings ONLY when a complex answer genuinely needs sections—never use generic labels like "# Analysis" or "# Summary".`,
         ``,
-        `# Summary`,
-        `Provide only 1-2 sentences focusing on implementation details. Mention if audio context influenced the solution. No conclusions or verbose explanations.`,
-        ``,
-        `---`,
-        `Remember: If audio is provided, reference it naturally in your response. Focus on the solution itself.`,
-        `CODE FORMATTING: Use ONLY \`\`\` WITH the language specifier for all code blocks.`
+        `DOMAIN ADAPTATION:`,
+        `- Coding: Complete code block under **Answer**, essential notes/complexity under **Explanation**.`,
+        `- Math/Logic: Final bolded result under **Answer**, step-by-step derivation under **Explanation**.`,
+        `- Law/Medicine/Sciences: Core conclusion/assessment under **Answer**, criteria/differentials under **Explanation**.`,
+        `- Multiple Choice: Correct option letter/text in bold under **Answer**, justification under **Explanation**.`
       );
-      this.addReadabilityRules(promptLines);
       const prompt = promptLines.join("\n");
 
       if (signal.aborted) throw new Error("Request aborted");
@@ -707,6 +741,7 @@ export class ProcessingHelper {
       if ((process.env.API_PROVIDER || "gemini") === "vertex") {
         try {
           accumulatedText = "";
+          let accumulatedThinking = "";
           await this.consumeStreamWithTimeout(
             this.streamVertexChatCompletion(signal, model, prompt, base64Images),
             (chunkText) => {
@@ -721,7 +756,17 @@ export class ProcessingHelper {
                 );
               }
             },
-            signal
+            signal,
+            100_000,
+            (thoughtText) => {
+              accumulatedThinking += thoughtText;
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  this.deps.PROCESSING_EVENTS.RESPONSE_THINKING_CHUNK,
+                  { thinking: accumulatedThinking }
+                );
+              }
+            }
           );
 
           responseText = accumulatedText;
@@ -795,6 +840,7 @@ export class ProcessingHelper {
         ]);
 
         accumulatedText = "";
+        let accumulatedThinking = "";
         await this.consumeStreamWithTimeout(
           result.stream,
           (chunkText) => {
@@ -809,7 +855,17 @@ export class ProcessingHelper {
               );
             }
           },
-          signal
+          signal,
+          100_000,
+          (thoughtText) => {
+            accumulatedThinking += thoughtText;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(
+                this.deps.PROCESSING_EVENTS.RESPONSE_THINKING_CHUNK,
+                { thinking: accumulatedThinking }
+              );
+            }
+          }
         );
 
         responseText = accumulatedText;
@@ -986,14 +1042,17 @@ export class ProcessingHelper {
         ? `models/${model}`
         : model;
       const thinkingLevel = (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
-      const generationConfig = /^gemini-3/.test(model)
-        ? ({ thinkingConfig: { thinkingLevel } } as any)
-        : undefined;
+      const generationConfig: any = {
+        maxOutputTokens: 12288,
+        thinkingConfig: /^gemini-[34]/.test(model)
+          ? { thinkingLevel, includeThoughts: true }
+          : { includeThoughts: true },
+      };
       // Google Search grounding: off by default (billed per search query).
       const webSearch = (await this.deps.getWebSearchEnabled?.()) || false;
       const geminiModel = genAI.getGenerativeModel({
         model: geminiModelId,
-        ...(generationConfig ? { generationConfig } : {}),
+        generationConfig,
         ...(webSearch ? { tools: [{ googleSearch: {} }] as any } : {}),
       });
 
@@ -1046,30 +1105,30 @@ export class ProcessingHelper {
         `---`,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
-        `# Context`,
-        `If audio is provided, briefly reference what you hear and how it relates to the visual content. Keep this extremely brief and focus on your solution approach. One or two sentences maximum.`,
+        `CORE DIRECTIVES & RESPONSE FLOW:`,
+        `Unless the user explicitly requests a different format, structure every response in this exact 3-part flow:`,
+        `1. **Question:** A single, concise 1-line restatement of the detected question or task so the user knows you read the right target.`,
+        `2. **Answer:** Immediately provide the direct final answer, verdict, or solution (e.g., the exact multiple-choice option, final math value, direct conclusion, or complete code block).`,
+        `3. **Explanation:** Provide a clear, structured breakdown explaining *why* the answer is correct, how the code/math works, or why other options are ruled out.`,
         ``,
-        `# What's the question?`,
-        `Briefly summarize based on the visual and audio content. This helps set context for the analysis.`,
+        `STRICT READABILITY & FORMATTING RULES:`,
+        `1. Break the answer into short paragraphs separated by blank lines—never write one long unbroken block of text.`,
+        `2. Use bullet or numbered lists for steps, options, or multiple points.`,
+        `3. Keep lines reasonably concise so text fits a narrow window without horizontal scrolling.`,
+        `4. Write ALL math as plain Unicode text (×, ÷, →, ⟹, ≤, ≥, ², ₂, ≠, ±, −) typed directly. NEVER use LaTeX backslash commands (\\times, \\frac, \\text, \\sqrt, \\%) outside of $...$ equations.`,
+        `5. Never wrap plain values in dollar signs. $18,000, 52ms, 3.0% must stay as plain text ($18,000, 52ms), NOT $$18,000$$ or $52\\text{ms}$.`,
+        `6. Only use $...$ or $$...$$ for genuinely complex multi-step equations, and keep those simple.`,
+        `7. Never use raw HTML tags (<p>, <br>, <b>) or wrap regular prose/LaTeX inside code blocks.`,
+        `8. Use topic-specific \`##\` or \`###\` headings ONLY when a complex answer genuinely needs sections—never use generic labels like "# Analysis" or "# Summary".`,
         ``,
-        `# Analysis`,
-        `If audio is provided, briefly reference what you hear and how it relates to the visual content. Keep this extremely brief and focus on your solution approach. One or two sentences maximum.`,
+        `DOMAIN ADAPTATION:`,
+        `- Coding: Complete code block under **Answer**, essential notes/complexity under **Explanation**.`,
+        `- Math/Logic: Final bolded result under **Answer**, step-by-step derivation under **Explanation**.`,
+        `- Law/Medicine/Sciences: Core conclusion/assessment under **Answer**, criteria/differentials under **Explanation**.`,
+        `- Multiple Choice: Correct option letter/text in bold under **Answer**, justification under **Explanation**.`,
         ``,
-        `# Solution`,
-        `Provide the direct solution based on both visual and audio content. Use standard Markdown. If code is necessary, use appropriate code blocks. Do not describe the task itself.`,
-        `IMPORTANT: When adding code blocks, use triple backticks WITH the language specifier. Use \`\`\`language\\ncode here\\n\`\`\`.`,
-        ``,
-        `# Approach`,
-        `Describe the approach taken to solve the issue. Focus on implementation details and any specific techniques used. Make sure to keep it concise and relevant to the visual/audio content.`,
-        ``,
-        `# Summary`,
-        `Provide only 1-2 sentences focusing on implementation details. Mention if audio context influenced the solution. No conclusions or verbose explanations.`,
-        ``,
-        `---`,
-        `Remember: If audio is provided, reference it naturally in your response. Focus on the solution itself.`,
-        `CODE FORMATTING: Use ONLY \`\`\` WITH the language specifier for all code blocks.`
+        `Build directly upon the previous conversation context without repeating prior explanations.`
       );
-      this.addReadabilityRules(promptLines);
       const prompt = promptLines.join("\n");
 
       if (signal.aborted) throw new Error("Request aborted");
@@ -1087,6 +1146,7 @@ export class ProcessingHelper {
       if ((process.env.API_PROVIDER || "gemini") === "vertex") {
         try {
           let accumulatedText = "";
+          let accumulatedThinking = "";
           await this.consumeStreamWithTimeout(
             this.streamVertexChatCompletion(signal, model, prompt, validBase64Images),
             (chunkText) => {
@@ -1100,7 +1160,17 @@ export class ProcessingHelper {
                 );
               }
             },
-            signal
+            signal,
+            100_000,
+            (thoughtText) => {
+              accumulatedThinking += thoughtText;
+              if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                  this.deps.PROCESSING_EVENTS.RESPONSE_THINKING_CHUNK,
+                  { thinking: accumulatedThinking }
+                );
+              }
+            }
           );
 
           followUpResponse = accumulatedText;
@@ -1173,6 +1243,7 @@ export class ProcessingHelper {
         ]);
 
         let accumulatedText = "";
+        let accumulatedThinking = "";
         await this.consumeStreamWithTimeout(
           result.stream,
           (chunkText) => {
@@ -1186,7 +1257,17 @@ export class ProcessingHelper {
               );
             }
           },
-          signal
+          signal,
+          100_000,
+          (thoughtText) => {
+            accumulatedThinking += thoughtText;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send(
+                this.deps.PROCESSING_EVENTS.RESPONSE_THINKING_CHUNK,
+                { thinking: accumulatedThinking }
+              );
+            }
+          }
         );
 
         followUpResponse = accumulatedText;

@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import Commands from "@/components/Commands";
 import { MarkdownSection } from "@/components/shared/MarkdownSection";
+import ThinkingIndicator from "@/components/shared/ThinkingIndicator";
 import { Screenshot } from "@/types/screenshots";
 import { fetchScreenshots } from "@/utils/screenshots";
 import phantomlensLogo from "../../../assets/icons/phantomlens_logo.svg";
@@ -36,6 +37,8 @@ function useTransparencyMode() {
 interface TaskResponseData {
   response: string;
   isFollowUp?: boolean;
+  thinking?: string;
+  thinkingDuration?: number;
 }
 
 export interface ResponseProps {
@@ -72,10 +75,16 @@ export default function Response({ setView }: ResponseProps) {
   const [isFollowUpResponse, setIsFollowUpResponse] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [streamedResponse, setStreamedResponse] = useState<string>("");
+  const [thinkingText, setThinkingText] = useState<string>("");
+  const [isThinking, setIsThinking] = useState<boolean>(false);
+  const [thinkingDuration, setThinkingDuration] = useState<number | undefined>(undefined);
 
   // Use refs to access latest state in callbacks without causing re-renders
   const isStreamingRef = useRef(false);
   const streamedResponseRef = useRef("");
+  const thinkingTextRef = useRef("");
+  const thinkingDurationRef = useRef<number | undefined>(undefined);
+  const thinkingStartTimeRef = useRef<number | null>(null);
 
   // Scroll velocity tracker: holding Alt+Arrow ramps the scroll speed up
   // while key-repeat events keep arriving, capped at a max multiplier.
@@ -98,17 +107,33 @@ export default function Response({ setView }: ResponseProps) {
   useEffect(() => {
     isStreamingRef.current = isStreaming;
     streamedResponseRef.current = streamedResponse;
-  }, [isStreaming, streamedResponse]);
+    thinkingTextRef.current = thinkingText;
+    thinkingDurationRef.current = thinkingDuration;
+  }, [isStreaming, streamedResponse, thinkingText, thinkingDuration]);
 
   // Throttle chunk updates to prevent excessive re-renders and window fluctuations
   const chunkUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingChunkRef = useRef<string | null>(null);
+
+  const finalizeThinkingPhase = useCallback(() => {
+    if (thinkingStartTimeRef.current !== null) {
+      const elapsedSec = Math.max(
+        1,
+        Math.round((Date.now() - thinkingStartTimeRef.current) / 1000)
+      );
+      setThinkingDuration(elapsedSec);
+      thinkingDurationRef.current = elapsedSec;
+      thinkingStartTimeRef.current = null;
+    }
+    setIsThinking(false);
+  }, []);
 
   const handleChunkUpdate = useCallback((data: { response: string } | string) => {
     // Handle both formats: { response: string } or string
     const chunk = typeof data === "string" ? data : data?.response || "";
     // Store the latest chunk
     pendingChunkRef.current = chunk;
+    finalizeThinkingPhase();
     
     // Throttle updates to every 50ms to prevent window fluctuations
     if (chunkUpdateTimeoutRef.current) {
@@ -123,7 +148,20 @@ export default function Response({ setView }: ResponseProps) {
       }
       chunkUpdateTimeoutRef.current = null;
     }, 50);
-  }, []);
+  }, [finalizeThinkingPhase]);
+
+  const handleThinkingChunkUpdate = useCallback(
+    (data: { thinking: string } | string) => {
+      const thought = typeof data === "string" ? data : data?.thinking || "";
+      if (thinkingStartTimeRef.current === null) {
+        thinkingStartTimeRef.current = Date.now();
+      }
+      setThinkingText(thought);
+      thinkingTextRef.current = thought;
+      setIsThinking(true);
+    },
+    []
+  );
 
   // Single function to update response data
   const updateResponseData = useCallback((responseText: string) => {
@@ -131,6 +169,7 @@ export default function Response({ setView }: ResponseProps) {
     setResponseData(responseText);
     setIsStreaming(false);
     setStreamedResponse("");
+    setIsThinking(false);
     if (chunkUpdateTimeoutRef.current) {
       clearTimeout(chunkUpdateTimeoutRef.current);
       chunkUpdateTimeoutRef.current = null;
@@ -178,6 +217,12 @@ export default function Response({ setView }: ResponseProps) {
         setIsFollowUpResponse(false);
         setIsStreaming(false);
         setStreamedResponse("");
+        setThinkingText("");
+        setIsThinking(false);
+        setThinkingDuration(undefined);
+        thinkingTextRef.current = "";
+        thinkingDurationRef.current = undefined;
+        thinkingStartTimeRef.current = null;
         if (chunkUpdateTimeoutRef.current) {
           clearTimeout(chunkUpdateTimeoutRef.current);
           chunkUpdateTimeoutRef.current = null;
@@ -191,6 +236,12 @@ export default function Response({ setView }: ResponseProps) {
         setIsFollowUpResponse(false);
         setIsStreaming(false);
         setStreamedResponse("");
+        setThinkingText("");
+        setIsThinking(true);
+        setThinkingDuration(undefined);
+        thinkingTextRef.current = "";
+        thinkingDurationRef.current = undefined;
+        thinkingStartTimeRef.current = Date.now();
         if (chunkUpdateTimeoutRef.current) {
           clearTimeout(chunkUpdateTimeoutRef.current);
           chunkUpdateTimeoutRef.current = null;
@@ -198,6 +249,7 @@ export default function Response({ setView }: ResponseProps) {
         pendingChunkRef.current = null;
       }),
       window.electronAPI.onResponseError((error: string) => {
+        finalizeThinkingPhase();
         const cachedResponse = queryClient.getQueryData<TaskResponseData>([
           "task_response",
         ]);
@@ -213,6 +265,7 @@ export default function Response({ setView }: ResponseProps) {
         }
         console.error("Processing error:", error);
       }),
+      window.electronAPI.onResponseThinkingChunk(handleThinkingChunkUpdate),
       window.electronAPI.onResponseChunk((chunk: string) => {
         handleChunkUpdate(chunk);
       }),
@@ -222,6 +275,7 @@ export default function Response({ setView }: ResponseProps) {
           clearTimeout(chunkUpdateTimeoutRef.current);
           chunkUpdateTimeoutRef.current = null;
         }
+        finalizeThinkingPhase();
 
         const responseText =
           typeof rawData === "string" ? rawData : rawData?.response || "";
@@ -234,7 +288,12 @@ export default function Response({ setView }: ResponseProps) {
         const currentStreaming = isStreamingRef.current;
         const currentStreamed = streamedResponseRef.current;
         const finalResponse = currentStreaming && currentStreamed ? currentStreamed : responseText;
-        queryClient.setQueryData(["task_response"], { response: finalResponse, isFollowUp });
+        queryClient.setQueryData(["task_response"], {
+          response: finalResponse,
+          isFollowUp,
+          thinking: thinkingTextRef.current,
+          thinkingDuration: thinkingDurationRef.current,
+        });
         updateResponseData(finalResponse);
       }),
       window.electronAPI.onHistoryLoad(({ content }) => {
@@ -325,6 +384,12 @@ export default function Response({ setView }: ResponseProps) {
         setResponseData(null);
         setErrorMessage(null);
         setIsFollowUpResponse(true); // Mark as follow-up from the start
+        setThinkingText("");
+        setIsThinking(true);
+        setThinkingDuration(undefined);
+        thinkingTextRef.current = "";
+        thinkingDurationRef.current = undefined;
+        thinkingStartTimeRef.current = Date.now();
         if (chunkUpdateTimeoutRef.current) {
           clearTimeout(chunkUpdateTimeoutRef.current);
           chunkUpdateTimeoutRef.current = null;
@@ -339,6 +404,7 @@ export default function Response({ setView }: ResponseProps) {
           clearTimeout(chunkUpdateTimeoutRef.current);
           chunkUpdateTimeoutRef.current = null;
         }
+        finalizeThinkingPhase();
 
         const responseText =
           typeof rawData === "string" ? rawData : rawData?.response || "";
@@ -353,12 +419,15 @@ export default function Response({ setView }: ResponseProps) {
         queryClient.setQueryData(["task_response"], {
           response: finalResponse,
           isFollowUp: true,
+          thinking: thinkingTextRef.current,
+          thinkingDuration: thinkingDurationRef.current,
         });
         setIsFollowUpResponse(true);
         updateResponseData(finalResponse);
       }),
       window.electronAPI.onFollowUpError((error: string) => {
         console.error("[Response] Follow up error:", error);
+        finalizeThinkingPhase();
         setIsStreaming(false);
         setStreamedResponse("");
         if (chunkUpdateTimeoutRef.current) {
@@ -375,13 +444,27 @@ export default function Response({ setView }: ResponseProps) {
         clearTimeout(chunkUpdateTimeoutRef.current);
       }
     };
-  }, [queryClient, updateResponseData, handleChunkUpdate]);
+  }, [
+    queryClient,
+    updateResponseData,
+    handleChunkUpdate,
+    handleThinkingChunkUpdate,
+    finalizeThinkingPhase,
+  ]);
 
   // Load cached response on mount
   useEffect(() => {
     const cachedResponse = queryClient.getQueryData<TaskResponseData>(["task_response"]);
     if (cachedResponse?.response) {
       setIsFollowUpResponse(cachedResponse.isFollowUp || false);
+      if (cachedResponse.thinking) {
+        setThinkingText(cachedResponse.thinking);
+        thinkingTextRef.current = cachedResponse.thinking;
+      }
+      if (cachedResponse.thinkingDuration) {
+        setThinkingDuration(cachedResponse.thinkingDuration);
+        thinkingDurationRef.current = cachedResponse.thinkingDuration;
+      }
       updateResponseData(cachedResponse.response);
     }
   }, [queryClient, updateResponseData]);
@@ -392,7 +475,11 @@ export default function Response({ setView }: ResponseProps) {
   const displayContent = isStreaming ? streamedResponse : responseData;
   const isLoading = !displayContent && !errorMessage && !isStreaming;
   const hasResponse =
-    Boolean(displayContent) || isLoading || Boolean(errorMessage);
+    Boolean(displayContent) ||
+    isLoading ||
+    Boolean(errorMessage) ||
+    Boolean(thinkingText) ||
+    isThinking;
   const normalizedError = errorMessage?.toLowerCase() ?? "";
   const isRateLimitError =
     normalizedError.includes("429") ||
@@ -516,25 +603,12 @@ export default function Response({ setView }: ResponseProps) {
               }}>
               
               {isLoading ? (
-                <div className="flex items-center justify-center gap-1.5 py-10">
-                  <div className="w-2 h-2 rounded-full animate-pulse" 
-                       style={{ 
-                         background: 'rgba(255, 255, 255, 0.6)',
-                         animationDelay: '0s',
-                         animationDuration: '1.5s'
-                       }}></div>
-                  <div className="w-2 h-2 rounded-full animate-pulse" 
-                       style={{ 
-                         background: 'rgba(255, 255, 255, 0.6)',
-                         animationDelay: '0.2s',
-                         animationDuration: '1.5s'
-                       }}></div>
-                  <div className="w-2 h-2 rounded-full animate-pulse" 
-                       style={{ 
-                         background: 'rgba(255, 255, 255, 0.6)',
-                         animationDelay: '0.4s',
-                         animationDuration: '1.5s'
-                       }}></div>
+                <div className="py-2 pr-4">
+                  <ThinkingIndicator
+                    thinking={thinkingText}
+                    isThinking={true}
+                    thinkingDuration={thinkingDuration}
+                  />
                 </div>
               ) : errorMessage ? (
                 <div className="flex flex-col gap-4 py-6 pr-4">
@@ -556,10 +630,19 @@ export default function Response({ setView }: ResponseProps) {
                   </div>
                 </div>
               ) : (
-                <MarkdownSection
-                  content={displayContent || ""}
-                  isLoading={isLoading}
-                />
+                <div className="space-y-3 pr-2">
+                  {(thinkingText || isThinking) && (
+                    <ThinkingIndicator
+                      thinking={thinkingText}
+                      isThinking={false}
+                      thinkingDuration={thinkingDuration}
+                    />
+                  )}
+                  <MarkdownSection
+                    content={displayContent || ""}
+                    isLoading={isLoading}
+                  />
+                </div>
               )}
             </div>
           </div>

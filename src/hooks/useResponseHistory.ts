@@ -7,6 +7,8 @@ export interface ResponseHistoryItem {
   timestamp: number;
   type: 'initial' | 'followup';
   screenshots?: string[];
+  thinking?: string;
+  thinkingDuration?: number;
 }
 
 export function useResponseHistory() {
@@ -15,13 +17,21 @@ export function useResponseHistory() {
   const [currentIndex, setCurrentIndex] = useState(-1);
 
   // Add a response to history
-  const addResponse = useCallback((response: string, type: 'initial' | 'followup', screenshots?: string[]) => {
+  const addResponse = useCallback((
+    response: string,
+    type: 'initial' | 'followup',
+    screenshots?: string[],
+    thinking?: string,
+    thinkingDuration?: number
+  ) => {
     const newItem: ResponseHistoryItem = {
       id: `${Date.now()}-${Math.random()}`,
       response,
       timestamp: Date.now(),
       type,
       screenshots,
+      thinking,
+      thinkingDuration,
     };
 
     setHistory(prev => {

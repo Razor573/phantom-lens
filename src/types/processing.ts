@@ -4,6 +4,7 @@ export interface ProcessingEvents {
   RESPONSE_SUCCESS: string;
   RESPONSE_ERROR: string;
   RESPONSE_CHUNK: string;
+  RESPONSE_THINKING_CHUNK: string;
   FOLLOWUP_START: string;
   FOLLOWUP_SUCCESS: string;
   FOLLOWUP_ERROR: string;
@@ -15,6 +16,8 @@ export interface ProcessingEvents {
 export interface TaskResponseData {
   response: string;
   isFollowUp?: boolean;
+  thinking?: string;
+  thinkingDuration?: number;
 }
 
 export * from './processing';

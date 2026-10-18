@@ -288,6 +288,7 @@ interface ProcessingEvents {
   INITIAL_RESPONSE_ERROR: string;
   FOLLOW_UP_START: string;
   RESPONSE_CHUNK: string;
+  RESPONSE_THINKING_CHUNK: string;
   RESET: string;
 }
 
@@ -379,6 +380,7 @@ const state: State = {
     FOLLOW_UP_ERROR: "follow-up-error",
     FOLLOW_UP_CHUNK: "follow-up-chunk",
     RESPONSE_CHUNK: "response-chunk",
+    RESPONSE_THINKING_CHUNK: "response-thinking-chunk",
     RESET: "reset",
   },
 };

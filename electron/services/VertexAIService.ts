@@ -216,7 +216,9 @@ export class VertexAIService {
    * Streamed generateContent against a publisher model. Yields text chunks.
    * Images are sent as inlineData parts, same as the Gemini provider.
    */
-  async *streamGenerateContent(opts: VertexStreamOptions): AsyncGenerator<string> {
+  async *streamGenerateContent(
+    opts: VertexStreamOptions
+  ): AsyncGenerator<{ type: "thought" | "text"; content: string }> {
     const projectId = (opts.projectId || this.parsedProjectId || "").trim();
     if (!projectId) {
       throw new Error(
@@ -236,12 +238,18 @@ export class VertexAIService {
     }
     const generationConfig: any = {
       candidateCount: 1,
-      // Cost guard: Argon-class output is $10/1M tokens at intro pricing.
-      maxOutputTokens: 8192,
+      maxOutputTokens: 12288,
       temperature: 0.45,
     };
     if (opts.thinkingLevel && /^gemini-[34]/.test(modelId)) {
-      generationConfig.thinkingConfig = { thinkingLevel: opts.thinkingLevel };
+      generationConfig.thinkingConfig = {
+        thinkingLevel: opts.thinkingLevel,
+        includeThoughts: true,
+      };
+    } else {
+      generationConfig.thinkingConfig = {
+        includeThoughts: true,
+      };
     }
     const body = JSON.stringify({
       contents: [{ role: "user", parts }],
@@ -325,12 +333,15 @@ export class VertexAIService {
             const json = JSON.parse(payload);
             const parts: Array<{ text?: string; thought?: boolean }> | undefined =
               json.candidates?.[0]?.content?.parts;
-            const text =
-              parts
-                ?.filter((p) => !p.thought)
-                .map((p) => p.text ?? "")
-                .join("") ?? "";
-            if (text) yield text;
+            if (parts) {
+              for (const p of parts) {
+                if (p.thought && p.text) {
+                  yield { type: "thought", content: p.text };
+                } else if (!p.thought && p.text) {
+                  yield { type: "text", content: p.text };
+                }
+              }
+            }
           } catch {
             // Partial SSE frame - ignore, the rest arrives in later chunks.
           }
