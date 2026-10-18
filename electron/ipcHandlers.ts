@@ -303,6 +303,56 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
     }
   }, "list-vertex-models"));
 
+  // Vertex AI: minimal prediction test against a specific model. Sends a tiny
+  // prompt and returns the first text chunk, proving the model actually
+  // answers (the list endpoint alone doesn't guarantee that).
+  ipcMain.handle("test-vertex-prediction", createSafeIpcHandler(async (_event: any, params?: { key?: string; projectId?: string; location?: string; model?: string }) => {
+    try {
+      const { vertexAIService, VertexAIService } = require("./services/VertexAIService");
+      let service = vertexAIService;
+      const testKey = (params?.key || "").trim();
+      if (testKey) {
+        VertexAIService.validateServiceAccountJson(testKey);
+        service = new VertexAIService();
+        service.setServiceAccountJson(testKey);
+      } else {
+        await ensureVertexCredentials();
+      }
+      const projectId = (params?.projectId || "").trim();
+      const location = (params?.location || "europe-west2").trim() || "europe-west2";
+      const model = (params?.model || "").trim();
+      if (!projectId) return { success: false, error: "Set your GCP project ID first" };
+      if (!model) return { success: false, error: "Pick a model first" };
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+      let text = "";
+      try {
+        for await (const chunk of service.streamGenerateContent({
+          projectId,
+          location,
+          model,
+          prompt: "Reply with exactly: OK",
+          base64Images: [],
+          signal: controller.signal,
+        })) {
+          text += chunk;
+          if (text.trim().length >= 2) break; // enough to prove it works
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+      if (!text.trim()) {
+        return { success: false, error: "Model returned an empty response" };
+      }
+      return { success: true, data: { reply: text.trim().slice(0, 100) } };
+    } catch (error: any) {
+      console.error("Error testing Vertex AI prediction:", error);
+      const msg = error?.name === "AbortError" ? "Request timed out after 30s" : (error.message || "Prediction test failed");
+      return { success: false, error: msg };
+    }
+  }, "test-vertex-prediction"));
+
   // Groq uses an OpenAI-compatible API: GET /openai/v1/models with a Bearer key.
   ipcMain.handle("list-groq-models", createSafeIpcHandler(async () => {
     try {

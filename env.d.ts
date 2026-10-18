@@ -91,6 +91,11 @@ interface Window {
       };
       error?: string;
     }>;
+    testVertexPrediction: (params?: { key?: string; projectId?: string; location?: string; model?: string }) => Promise<{
+      success: boolean;
+      data?: { reply: string };
+      error?: string;
+    }>;
     onApiKeyUpdated: (callback: () => void) => () => void;
     onApiKeyMissing: (callback: () => void) => () => void;
     setIgnoreMouseEvents: () => Promise<{ success: boolean; error?: string }>;

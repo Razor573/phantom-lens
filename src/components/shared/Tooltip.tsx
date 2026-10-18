@@ -508,21 +508,30 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   }, [refreshModelList]);
 
   // Test the Vertex AI connection with the current form values (pasted key
-  // if present, otherwise the saved one) without saving anything.
+  // if present, otherwise the saved one) without saving anything. First
+  // checks the model catalogue (auth + project), then sends a tiny prompt
+  // to the selected model to prove it actually answers.
   const handleTestVertexConnection = useCallback(async () => {
     setVertexTestResult(null);
     setVertexTestLoading(true);
     try {
-      const response = await window.electronAPI.listVertexModels({
-        key: vertexKeyRef.current.trim() || undefined,
-        projectId: vertexProjectRef.current.trim() || undefined,
-        location: vertexLocationRef.current.trim() || undefined,
-      });
-      if (response?.success && response.data) {
-        const n = response.data.models.length;
-        setVertexTestResult(`Connected - ${n} model${n === 1 ? "" : "s"} available.`);
+      const key = vertexKeyRef.current.trim() || undefined;
+      const projectId = vertexProjectRef.current.trim() || undefined;
+      const location = vertexLocationRef.current.trim() || undefined;
+      const model = selectedModelRef.current.trim() || undefined;
+      const listRes = await window.electronAPI.listVertexModels({ key, projectId, location });
+      if (!listRes?.success || !listRes.data) {
+        setVertexTestResult(`Failed: ${listRes?.error || "unknown error"}`);
+        return;
+      }
+      const n = listRes.data.models.length;
+      // Now prove the selected model actually responds.
+      setVertexTestResult(`Connected - testing ${model || "model"}...`);
+      const predRes = await window.electronAPI.testVertexPrediction({ key, projectId, location, model });
+      if (predRes?.success && predRes.data) {
+        setVertexTestResult(`Connected - ${model} answered: "${predRes.data.reply}"`);
       } else {
-        setVertexTestResult(`Failed: ${response?.error || "unknown error"}`);
+        setVertexTestResult(`Catalogue OK (${n} model${n === 1 ? "" : "s"}), but ${model || "model"} failed: ${predRes?.error || "unknown error"}`);
       }
     } catch (err: any) {
       setVertexTestResult(`Failed: ${err?.message || "unknown error"}`);

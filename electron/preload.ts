@@ -90,6 +90,11 @@ interface ElectronAPI {
     };
     error?: string;
   }>;
+  testVertexPrediction: (params?: { key?: string; projectId?: string; location?: string; model?: string }) => Promise<{
+    success: boolean;
+    data?: { reply: string };
+    error?: string;
+  }>;
   onApiKeyUpdated: (callback: () => void) => () => void;
   onApiKeyMissing: (callback: () => void) => () => void;
   onFocusPromptInput: (callback: () => void) => () => void;
@@ -331,6 +336,7 @@ const electronAPI = {
   listGeminiModels: () => ipcRenderer.invoke("list-gemini-models"),
   listGroqModels: () => ipcRenderer.invoke("list-groq-models"),
   listVertexModels: (testParams?: { key?: string; projectId?: string; location?: string }) => ipcRenderer.invoke("list-vertex-models", testParams),
+  testVertexPrediction: (params?: { key?: string; projectId?: string; location?: string; model?: string }) => ipcRenderer.invoke("test-vertex-prediction", params),
   onApiKeyUpdated: (callback: () => void) => {
     const subscription = () => callback();
     ipcRenderer.on("api-key-updated", subscription);
