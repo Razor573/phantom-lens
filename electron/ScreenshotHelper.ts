@@ -213,17 +213,23 @@ export class ScreenshotHelper {
     return this.safeFileOperation(async () => {
       const tmpPath = path.join(app.getPath("temp"), `${uuidv4()}.png`);
       const script = `
+        Add-Type -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' -Name DpiUtil -Namespace Win32
+        [Win32.DpiUtil]::SetProcessDPIAware() | Out-Null
         Add-Type -AssemblyName System.Windows.Forms
         Add-Type -AssemblyName System.Drawing
-        $screen = [System.Windows.Forms.Screen]::PrimaryScreen
-        $bitmap = New-Object System.Drawing.Bitmap $screen.Bounds.Width, $screen.Bounds.Height
+        $screen = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position)
+        if ($null -eq $screen) {
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen
+        }
+        $bounds = $screen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $graphics.CopyFromScreen($screen.Bounds.X, $screen.Bounds.Y, 0, 0, $bitmap.Size)
-        $bitmap.Save('${tmpPath.replace(/\\/g, "\\\\")}')
+        $graphics.CopyFromScreen($bounds.X, $bounds.Y, 0, 0, $bitmap.Size)
+        $bitmap.Save('${tmpPath.replace(/\\/g, "\\\\")}', [System.Drawing.Imaging.ImageFormat]::Png)
         $graphics.Dispose()
         $bitmap.Dispose()
       `;
-      await execFileAsync("powershell", ["-command", script]);
+      await execFileAsync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script]);
       const buffer = await fs.promises.readFile(tmpPath);
       await fs.promises.unlink(tmpPath);
       return buffer;
