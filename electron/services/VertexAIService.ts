@@ -15,11 +15,24 @@ const SCOPES = ["https://www.googleapis.com/auth/cloud-platform"];
  * so new models (e.g. gemini-4-argon) appear without an app update - the
  * same pattern as the Gemini API-key provider's listGeminiModels().
  */
+export interface VertexStreamOptions {
+  projectId: string;
+  location: string;
+  model: string;
+  prompt: string;
+  base64Images: string[];
+  thinkingLevel?: string;
+  webSearch?: boolean;
+  signal: AbortSignal;
+}
+
 export class VertexAIService {
   private auth: GoogleAuth;
   private cachedToken: string | null = null;
   private tokenExpiryMs = 0;
   private serviceAccountJson: string | null = null;
+  private parsedProjectId: string | null = null;
+  private resolvedModelLocations: Map<string, string> = new Map();
 
   constructor() {
     this.auth = this.buildAuth();
@@ -43,10 +56,55 @@ export class VertexAIService {
 
   /** Use a pasted service-account JSON key instead of gcloud ADC. */
   setServiceAccountJson(json: string | null): void {
-    const trimmed = (json || "").trim();
+    const trimmed = (json || "").replace(/^\uFEFF/, "").trim();
     this.serviceAccountJson = trimmed || null;
+    this.parsedProjectId = null;
+    if (trimmed) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed?.project_id === "string" && parsed.project_id.trim()) {
+          this.parsedProjectId = parsed.project_id.trim();
+        }
+      } catch {
+        // Ignore parse error; buildAuth falls back to ADC.
+      }
+    }
     this.auth = this.buildAuth();
     this.clearToken();
+    this.resolvedModelLocations.clear();
+  }
+
+  getProjectIdFromKey(): string | null {
+    return this.parsedProjectId;
+  }
+
+  public static getEndpointHost(location: string): string {
+    const loc = (location || "global").trim().toLowerCase() || "global";
+    return loc === "global"
+      ? "aiplatform.googleapis.com"
+      : `${loc}-aiplatform.googleapis.com`;
+  }
+
+  public static isSupportedChatModel(id: string): boolean {
+    if (!id || !id.startsWith("gemini-")) return false;
+    if (
+      id.startsWith("gemini-1.") ||
+      id.startsWith("gemini-2.0-") ||
+      id === "gemini-3-pro-preview" ||
+      id === "gemini-2.5-flash-preview-04-17" ||
+      id === "gemini-2.5-pro-exp-03-25" ||
+      /-exp($|-)/.test(id)
+    ) {
+      return false;
+    }
+    if (
+      /-(tts|live|transcribe|translate|image|embedding|omni|nano-banana|computer-use|robotics|audio)($|-)/.test(
+        id
+      )
+    ) {
+      return false;
+    }
+    return true;
   }
 
   /** Validate pasted key JSON early so settings can show a clear error. */
@@ -98,6 +156,7 @@ export class VertexAIService {
   clearToken(): void {
     this.cachedToken = null;
     this.tokenExpiryMs = 0;
+    this.resolvedModelLocations.clear();
   }
 
   /**
@@ -106,24 +165,27 @@ export class VertexAIService {
    */
   async listModels(
     projectId: string,
-    location: string
+    location: string = "global"
   ): Promise<Array<{ id: string; name: string }>> {
     const token = await this.getAccessToken();
-    // Publisher catalogue is a global Model Garden endpoint: no project or
-    // location in the path - the project goes in x-goog-user-project.
-    // (docs: publishers.models.list is v1beta1-only -
-    // GET /v1beta1/publishers/{publisher}/models)
-    // listAllVersions=true: without it the API returns a small default set
-    // (no Argon, no older Flash versions).
-    const url =
-      `https://${location}-aiplatform.googleapis.com/v1beta1/publishers/google/models` +
-      `?listAllVersions=true&pageSize=100`;
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "x-goog-user-project": projectId,
-      },
-    });
+    const effectiveProject = (projectId || this.parsedProjectId || "").trim();
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    };
+    if (effectiveProject) {
+      headers["x-goog-user-project"] = effectiveProject;
+    }
+
+    const globalUrl =
+      "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?listAllVersions=true&pageSize=100";
+    let res = await fetch(globalUrl, { headers });
+    const normLoc = (location || "global").trim().toLowerCase() || "global";
+    if (!res.ok && normLoc !== "global") {
+      const fallbackUrl =
+        `https://${VertexAIService.getEndpointHost(normLoc)}/v1beta1/publishers/google/models` +
+        `?listAllVersions=true&pageSize=100`;
+      res = await fetch(fallbackUrl, { headers });
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       // Google returns an HTML error page for 404s - extract the title.
@@ -136,37 +198,38 @@ export class VertexAIService {
       );
     }
     const data: any = await res.json();
-    // Keep only Gemini chat models: the publisher catalogue mixes in
-    // embeddings, Imagen, etc., and listAllVersions=true returns one entry
-    // per version. Filter by ID pattern and dedupe.
     const seen = new Map<string, { id: string; name: string }>();
     for (const m of data.publisherModels || []) {
       const full = String(m.name || ""); // publishers/google/models/<id>
       const id = full.split("/").pop() || full;
-      if (!id || !/^gemini-/i.test(id) || /embedding/i.test(id)) continue;
+      if (!VertexAIService.isSupportedChatModel(id)) continue;
       if (!seen.has(id)) {
         seen.set(id, { id, name: String(m.displayName || id) });
       }
     }
-    return [...seen.values()];
+    return [...seen.values()].sort((a, b) =>
+      b.id.localeCompare(a.id, undefined, { numeric: true })
+    );
   }
 
   /**
    * Streamed generateContent against a publisher model. Yields text chunks.
    * Images are sent as inlineData parts, same as the Gemini provider.
    */
-  async *streamGenerateContent(opts: {
-    projectId: string;
-    location: string;
-    model: string;
-    prompt: string;
-    base64Images: string[];
-    thinkingLevel?: string;
-    webSearch?: boolean;
-    signal: AbortSignal;
-  }): AsyncGenerator<string> {
+  async *streamGenerateContent(opts: VertexStreamOptions): AsyncGenerator<string> {
+    const projectId = (opts.projectId || this.parsedProjectId || "").trim();
+    if (!projectId) {
+      throw new Error(
+        "Vertex AI project ID is missing. Set a GCP Project ID or paste a service account JSON key."
+      );
+    }
+    const requestedLoc = (opts.location || "global").trim().toLowerCase() || "global";
+    const modelId = opts.model
+      .trim()
+      .replace(/^models\//, "")
+      .replace(/^publishers\/google\/models\//, "");
+
     const token = await this.getAccessToken();
-    const modelId = opts.model.replace(/^publishers\/google\/models\//, "");
     const parts: any[] = [{ text: opts.prompt }];
     for (const img of opts.base64Images) {
       parts.push({ inlineData: { mimeType: "image/png", data: img } });
@@ -188,18 +251,33 @@ export class VertexAIService {
       ...(opts.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
     });
 
-    // Try the configured region first, then fall back to us-central1
-    // (Google's primary region - some models aren't in every region yet).
-    const locations = [opts.location];
-    if (opts.location !== "us-central1") locations.push("us-central1");
+    const cacheKey = `${projectId}:${modelId}`;
+    const cachedLoc = this.resolvedModelLocations.get(cacheKey);
+    const isGlobalFirstModel = /^gemini-(3|4)(\.|-)/.test(modelId);
+    const candidateLocs: string[] = [];
+    const pushUnique = (loc?: string) => {
+      if (loc && !candidateLocs.includes(loc)) candidateLocs.push(loc);
+    };
+    if (cachedLoc) pushUnique(cachedLoc);
+    if (requestedLoc === "global" || isGlobalFirstModel) {
+      pushUnique("global");
+      pushUnique(requestedLoc);
+      pushUnique("us-central1");
+      pushUnique("europe-west2");
+    } else {
+      pushUnique(requestedLoc);
+      pushUnique("global");
+      pushUnique("us-central1");
+    }
+    const locationsToTry = candidateLocs;
+
     let res: Response | null = null;
     let lastError = "";
-    for (const loc of locations) {
-      // v1 is the documented publishers path for prediction:
-      // /v1/projects/{project}/locations/{location}/publishers/google/models/{model}:streamGenerateContent
+    for (const loc of locationsToTry) {
+      const host = VertexAIService.getEndpointHost(loc);
       const url =
-        `https://${loc}-aiplatform.googleapis.com/v1` +
-        `/projects/${encodeURIComponent(opts.projectId)}` +
+        `https://${host}/v1` +
+        `/projects/${encodeURIComponent(projectId)}` +
         `/locations/${encodeURIComponent(loc)}` +
         `/publishers/google/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
       res = await fetch(url, {
@@ -211,7 +289,10 @@ export class VertexAIService {
         body,
         signal: opts.signal,
       });
-      if (res.ok) break;
+      if (res.ok && res.body) {
+        this.resolvedModelLocations.set(cacheKey, loc);
+        break;
+      }
       const errBody = await res.text().catch(() => "");
       if (res.status === 401) this.clearToken();
       lastError = `Vertex AI request failed (HTTP ${res.status}): ${errBody.slice(0, 300)}`;
@@ -221,11 +302,11 @@ export class VertexAIService {
       }
       res = null; // try next region
     }
-    if (!res || !res.ok) {
+    if (!res || !res.ok || !res.body) {
       throw new Error(lastError || "Vertex AI request failed in all regions");
     }
 
-    const reader = res.body!.getReader();
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
     try {
@@ -242,10 +323,13 @@ export class VertexAIService {
           if (!payload || payload === "[DONE]") continue;
           try {
             const json = JSON.parse(payload);
+            const parts: Array<{ text?: string; thought?: boolean }> | undefined =
+              json.candidates?.[0]?.content?.parts;
             const text =
-              json.candidates?.[0]?.content?.parts
-                ?.map((p: any) => p.text || "")
-                .join("") || "";
+              parts
+                ?.filter((p) => !p.thought)
+                .map((p) => p.text ?? "")
+                .join("") ?? "";
             if (text) yield text;
           } catch {
             // Partial SSE frame - ignore, the rest arrives in later chunks.

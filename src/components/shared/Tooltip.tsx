@@ -35,15 +35,10 @@ interface TooltipProps {
 // FIXED: Updated model options to match backend support
 const MODEL_OPTIONS = [
   {
-    id: "gemini-3-pro-preview",
-    name: "Gemini 3 Pro (Preview)",
-    description: "Latest Gemini 3 preview model for top-tier reasoning",
-    default: true,
-  },
-  {
     id: "gemini-3-flash-preview",
     name: "Gemini 3 Flash (Preview)",
     description: "Latest Gemini 3 flash preview model (Google)",
+    default: true,
   },
   {
     id: "gemini-2.5-pro",
@@ -128,6 +123,21 @@ const VERTEX_MODEL_OPTIONS = [
     name: "Gemini 3.1 Flash-Lite",
     description: "Lightweight flash model (Google, via Vertex AI)",
   },
+  {
+    id: "gemini-3-flash-preview",
+    name: "Gemini 3 Flash Preview",
+    description: "Gemini 3 Flash preview (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    description: "Advanced reasoning model (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-2.5-flash",
+    name: "Gemini 2.5 Flash",
+    description: "Fast and efficient Gemini model (Google, via Vertex AI)",
+  },
 ];
 
 export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
@@ -147,7 +157,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const [provider, setProvider] = useState<"gemini" | "groq" | "vertex">("gemini");
   // Vertex AI (gcloud ADC): GCP project ID + region instead of an API key.
   const [vertexProject, setVertexProject] = useState("");
-  const [vertexLocation, setVertexLocation] = useState("europe-west2");
+  const [vertexLocation, setVertexLocation] = useState("global");
   // Pasted service-account JSON key (no CLI needed). Write-only in the UI.
   const [vertexKey, setVertexKey] = useState("");
   const [vertexKeySaved, setVertexKeySaved] = useState(false);
@@ -340,10 +350,10 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         const configData = response.data;
         const prov = configData.provider === "groq" ? "groq" : configData.provider === "vertex" ? "vertex" : "gemini";
         setProvider(prov);
+        if (configData.vertexProject) setVertexProject(configData.vertexProject);
+        setVertexLocation(configData.vertexLocation || "global");
+        setVertexKeySaved(!!configData.vertexKeySaved);
         if (prov === "vertex") {
-          if (configData.vertexProject) setVertexProject(configData.vertexProject);
-          if (configData.vertexLocation) setVertexLocation(configData.vertexLocation);
-          setVertexKeySaved(!!configData.vertexKeySaved);
           setActiveConfigSummary(
             `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""} · key ${configData.vertexKeySaved ? "saved" : "missing - paste it below"}${configData.webSearch ? " · web search on" : ""}`.trim()
           );
@@ -1183,7 +1193,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                           }}
                           disabled={!isInteractive}
                           tabIndex={isInteractive ? 0 : -1}
-                          placeholder="europe-west2"
+                          placeholder="global"
                           className={`w-full px-4 py-2 rounded-lg text-white text-sm placeholder-white/50 transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
                             isInteractive
                               ? 'focus:outline-none focus:ring-2 focus:ring-blue-500/20'
@@ -1199,7 +1209,18 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                           value={vertexKey}
                           onChange={(e) => {
                             if (!isInteractive) return;
-                            setVertexKey(e.target.value);
+                            const val = e.target.value;
+                            setVertexKey(val);
+                            if (!vertexProject.trim() && val.trim()) {
+                              try {
+                                const parsed = JSON.parse(val.replace(/^\uFEFF/, "").trim());
+                                if (typeof parsed?.project_id === "string" && parsed.project_id.trim()) {
+                                  setVertexProject(parsed.project_id.trim());
+                                }
+                              } catch {
+                                // Ignore incomplete JSON while typing/pasting
+                              }
+                            }
                           }}
                           disabled={!isInteractive}
                           tabIndex={isInteractive ? 0 : -1}

@@ -7,6 +7,7 @@ import { initializeIpcHandlers } from "./ipcHandlers";
 import { StealthKeyboardManager } from "./StealthKeyboardManager";
 import { incrementAppOpenCounter } from "./UsageCounter";
 import { extractFileText, ATTACH_DIALOG_FILTERS } from "./fileTextExtractor";
+import { vertexAIService } from "./services/VertexAIService";
 import path from "path";
 import { randomUUID } from "crypto";
 
@@ -1369,24 +1370,24 @@ async function loadEnvVariables() {
     const provider = (await getStoreValue("api-provider")) || "gemini";
     const storedModel = (await getStoreValue("api-model")) || "gemini-2.0-flash";
 
-    // Vertex AI authenticates via gcloud ADC - project/location, no API key.
+    // Vertex AI authenticates via gcloud ADC or service-account JSON.
     if (provider === "vertex") {
+      try {
+        const vertexSaJson = (await getStoreValue("vertex-service-account")) || "";
+        vertexAIService.setServiceAccountJson(vertexSaJson || null);
+      } catch (e) {
+        console.warn("Could not apply stored Vertex AI credentials:", e);
+      }
       const vertexProject = await getStoreValue("vertex-project");
-      const vertexLocation = (await getStoreValue("vertex-location")) || "europe-west2";
-      if (vertexProject && storedModel) {
+      const vertexLocation = (await getStoreValue("vertex-location")) || "global";
+      const effectiveVertexProject =
+        vertexProject || vertexAIService.getProjectIdFromKey() || "";
+      if (effectiveVertexProject && storedModel) {
         process.env.API_PROVIDER = provider;
-        process.env.VERTEX_PROJECT = vertexProject;
-        process.env.VERTEX_LOCATION = vertexLocation;
+        process.env.VERTEX_PROJECT = effectiveVertexProject;
+        process.env.VERTEX_LOCATION = vertexLocation || "global";
         process.env.API_MODEL = storedModel;
-        // Pasted service-account key (no CLI needed); falls back to ADC.
-        try {
-          const { vertexAIService } = require("./services/VertexAIService");
-          const storedKey = (await getStoreValue("vertex-service-account")) || "";
-          vertexAIService.setServiceAccountJson(storedKey || null);
-        } catch (e) {
-          console.warn("Could not apply stored Vertex AI credentials:", e);
-        }
-        console.log(`API configuration loaded: Provider=vertex, Model=${storedModel}, Project=${vertexProject}`);
+        console.log(`API configuration loaded: Provider=vertex, Model=${storedModel}, Project=${effectiveVertexProject}`);
         return;
       }
       console.log("No Vertex AI project in user preferences. User will be prompted to enter one.");

@@ -102,7 +102,13 @@ export class ProcessingHelper {
         (async () => {
           for await (const chunk of stream) {
             if (signal.aborted) throw new Error("Request aborted");
-            onChunk(chunk.text());
+            const chunkText =
+              typeof chunk === "string"
+                ? chunk
+                : typeof chunk?.text === "function"
+                  ? chunk.text()
+                  : "";
+            if (chunkText) onChunk(chunkText);
           }
         })(),
         new Promise<never>((_, reject) => {
@@ -152,16 +158,20 @@ export class ProcessingHelper {
   /**
    * Vertex AI streaming via Application Default Credentials
    * (`gcloud auth application-default login` on the user's machine).
-   * Yields plain text chunks; project/location come from settings.
+   * Yields { text() } chunks; project/location come from settings.
    */
   private async *streamVertexChatCompletion(
     signal: AbortSignal,
     model: string,
     prompt: string,
     base64Images: string[]
-  ): AsyncGenerator<string> {
-    const projectId = (process.env.VERTEX_PROJECT || "").trim();
-    const location = (process.env.VERTEX_LOCATION || "europe-west2").trim();
+  ): AsyncGenerator<{ text: () => string }> {
+    const projectId = (
+      process.env.VERTEX_PROJECT ||
+      vertexAIService.getProjectIdFromKey() ||
+      ""
+    ).trim();
+    const location = (process.env.VERTEX_LOCATION || "global").trim() || "global";
     if (!projectId) {
       throw new Error(
         "Vertex AI project not set. Open settings, choose the Vertex AI provider and enter your GCP project ID."
@@ -170,7 +180,7 @@ export class ProcessingHelper {
     const thinkingLevel =
       (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
     const webSearch = (await this.deps.getWebSearchEnabled?.()) || false;
-    yield* vertexAIService.streamGenerateContent({
+    for await (const chunk of vertexAIService.streamGenerateContent({
       projectId,
       location,
       model,
@@ -179,7 +189,9 @@ export class ProcessingHelper {
       thinkingLevel,
       webSearch,
       signal,
-    });
+    })) {
+      yield { text: () => chunk };
+    }
   }
 
   /**

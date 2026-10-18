@@ -6,6 +6,7 @@ import * as fs from "fs";
 import { secureConfig } from "./config";
 import { updateService } from "./UpdateService";
 import { getAppOpenCount, resetAppOpenCount } from "./UsageCounter";
+import { vertexAIService, VertexAIService } from "./services/VertexAIService";
 
 // ============================================================================
 // Enhanced Error Handling Wrapper
@@ -67,7 +68,6 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // (if the user pasted one) rather than gcloud ADC.
   async function ensureVertexCredentials(): Promise<void> {
     try {
-      const { vertexAIService } = require("./services/VertexAIService");
       const stored = (await getStoreValue("vertex-service-account")) || "";
       vertexAIService.setServiceAccountJson(stored || null);
     } catch (e) {
@@ -77,11 +77,19 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("get-api-config", createSafeIpcHandler(async () => {
     try {
+      await ensureVertexCredentials();
       const provider = (await getStoreValue("api-provider")) || "gemini";
       const model = (await getStoreValue("api-model")) || "gemini-3-flash-preview";
       const thinkingLevel = (await getStoreValue("gemini-thinking-level")) || "MEDIUM";
-      const vertexProject = (await getStoreValue("vertex-project")) || "";
-      const vertexLocation = (await getStoreValue("vertex-location")) || "europe-west2";
+      const vertexProject =
+        (await getStoreValue("vertex-project")) ||
+        process.env.VERTEX_PROJECT ||
+        vertexAIService.getProjectIdFromKey() ||
+        "";
+      const vertexLocation =
+        (await getStoreValue("vertex-location")) ||
+        process.env.VERTEX_LOCATION ||
+        "global";
       const vertexKeySaved = !!((await getStoreValue("vertex-service-account")) || "");
       const webSearch = (await getStoreValue("web-search")) === true;
 
@@ -125,24 +133,32 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       // Keys are kept per-provider so switching providers never loses
       // the other provider's key.
       if (provider === "vertex") {
-        const vertexProject = (config.vertexProject || "").trim();
-        const vertexLocation = (config.vertexLocation || "europe-west2").trim() || "europe-west2";
+        // Pasted service-account key is optional (ADC fallback); validate
+        // when provided and apply first so project_id can be inferred from it.
+        const pastedKey = (config.vertexServiceAccount || "").trim();
+        if (pastedKey) {
+          try {
+            VertexAIService.validateServiceAccountJson(pastedKey);
+            vertexAIService.setServiceAccountJson(pastedKey);
+          } catch (e: any) {
+            return { success: false, error: e.message || "Invalid service account key" };
+          }
+        } else {
+          await ensureVertexCredentials();
+        }
+        const storedProject = ((await getStoreValue("vertex-project")) as string) || "";
+        const vertexProject = (
+          config.vertexProject ||
+          vertexAIService.getProjectIdFromKey() ||
+          storedProject ||
+          ""
+        ).trim();
+        const vertexLocation = (config.vertexLocation || "global").trim() || "global";
         if (!vertexProject) {
           return { success: false, error: "Vertex AI needs a GCP project ID" };
         }
         if (!model || typeof model !== "string" || !model.trim()) {
           return { success: false, error: "Invalid model selection" };
-        }
-        // Pasted service-account key is optional (ADC fallback); validate
-        // when provided and only overwrite the stored key then.
-        const pastedKey = (config.vertexServiceAccount || "").trim();
-        if (pastedKey) {
-          try {
-            const { VertexAIService } = require("./services/VertexAIService");
-            VertexAIService.validateServiceAccountJson(pastedKey);
-          } catch (e: any) {
-            return { success: false, error: e.message || "Invalid service account key" };
-          }
         }
         const thinkingLevel = ["LOW", "MEDIUM", "HIGH"].includes(config.thinkingLevel || "")
           ? config.thinkingLevel!
@@ -271,11 +287,10 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // Accepts optional test params to validate a pasted-but-unsaved key.
   ipcMain.handle("list-vertex-models", createSafeIpcHandler(async (_event: any, testParams?: { key?: string; projectId?: string; location?: string }) => {
     try {
-      const { vertexAIService, VertexAIService } = require("./services/VertexAIService");
       let service = vertexAIService;
       let projectId: string;
       let location: string;
-      if (testParams && (testParams.key || testParams.projectId)) {
+      if (testParams && (testParams.key || testParams.projectId || testParams.location)) {
         // Test mode: use the provided key/project without saving anything.
         const testKey = (testParams.key || "").trim();
         if (testKey) {
@@ -285,12 +300,26 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         } else {
           await ensureVertexCredentials();
         }
-        projectId = (testParams.projectId || "").trim();
-        location = (testParams.location || "europe-west2").trim() || "europe-west2";
+        const storedProject = (await getStoreValue("vertex-project")) || "";
+        const storedLocation = (await getStoreValue("vertex-location")) || "";
+        projectId = (
+          testParams.projectId ||
+          service.getProjectIdFromKey() ||
+          storedProject ||
+          process.env.VERTEX_PROJECT ||
+          vertexAIService.getProjectIdFromKey() ||
+          ""
+        ).trim();
+        location = (testParams.location || storedLocation || process.env.VERTEX_LOCATION || "global").trim() || "global";
       } else {
         await ensureVertexCredentials();
-        projectId = (await getStoreValue("vertex-project")) || "";
-        location = (await getStoreValue("vertex-location")) || "europe-west2";
+        projectId = (
+          (await getStoreValue("vertex-project")) ||
+          process.env.VERTEX_PROJECT ||
+          vertexAIService.getProjectIdFromKey() ||
+          ""
+        ).trim();
+        location = ((await getStoreValue("vertex-location")) || process.env.VERTEX_LOCATION || "global").trim() || "global";
       }
       if (!projectId) {
         return { success: false, error: "Set your GCP project ID first" };
@@ -308,7 +337,6 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
   // answers (the list endpoint alone doesn't guarantee that).
   ipcMain.handle("test-vertex-prediction", createSafeIpcHandler(async (_event: any, params?: { key?: string; projectId?: string; location?: string; model?: string }) => {
     try {
-      const { vertexAIService, VertexAIService } = require("./services/VertexAIService");
       let service = vertexAIService;
       const testKey = (params?.key || "").trim();
       if (testKey) {
@@ -318,8 +346,17 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       } else {
         await ensureVertexCredentials();
       }
-      const projectId = (params?.projectId || "").trim();
-      const location = (params?.location || "europe-west2").trim() || "europe-west2";
+      const storedProject = (await getStoreValue("vertex-project")) || "";
+      const storedLocation = (await getStoreValue("vertex-location")) || "";
+      const projectId = (
+        params?.projectId ||
+        service.getProjectIdFromKey() ||
+        storedProject ||
+        process.env.VERTEX_PROJECT ||
+        vertexAIService.getProjectIdFromKey() ||
+        ""
+      ).trim();
+      const location = (params?.location || storedLocation || process.env.VERTEX_LOCATION || "global").trim() || "global";
       const model = (params?.model || "").trim();
       if (!projectId) return { success: false, error: "Set your GCP project ID first" };
       if (!model) return { success: false, error: "Pick a model first" };
