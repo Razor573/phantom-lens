@@ -11,7 +11,13 @@ export class ShortcutsHelper {
     // Define all shortcuts and their handlers with NO CONFLICTS
     this.shortcuts = {
       "CommandOrControl+Enter": async () => {
-        // Always stealth mode - just process screenshots
+        // Cancel in-flight processing if active, clear queues, pause briefly, then restart
+        if (this.deps.processingHelper?.isProcessing()) {
+          console.log("[Shortcuts] Ctrl+Enter pressed while processing in flight. Canceling ongoing request and restarting...");
+          this.deps.processingHelper.cancelOngoingRequests({ suppressResetEvent: true });
+          this.deps.clearQueues();
+          await new Promise((r) => setTimeout(r, 60));
+        }
         await this.deps.takeScreenshot();
         await this.deps.processingHelper?.processScreenshots();
       },

@@ -10,6 +10,7 @@ export class ProcessingHelper {
   private screenshotHelper: ScreenshotHelper;
   private isCurrentlyProcessing: boolean = false;
   private previousResponse: string | null = null; // Store previous response for context
+  private currentRequestId: number = 0;
 
   // ============================================================================
   // BUG FIX: Enhanced AbortController Management
@@ -84,25 +85,36 @@ export class ProcessingHelper {
   }
 
   /**
-   * Consume a Gemini stream with an overall timeout. The SDK's async iterator
-   * does not reject when our AbortSignal fires while it is still waiting for
-   * the first chunk, so without this a stalled stream would spin forever in
-   * the UI with no error. The timeout throws STREAM_TIMEOUT, which the
-   * callers map to a user-facing message.
+  /**
+   * Consume an LLM stream with a sliding inactivity timeout.
+   * As long as chunks or thoughts arrive within inactivityTimeoutMs (default 60s),
+   * the stream stays alive. It will only throw STREAM_TIMEOUT if the stream stalls
+   * completely for inactivityTimeoutMs.
    */
   private async consumeStreamWithTimeout(
     stream: AsyncIterable<any>,
     onChunk: (chunkText: string) => void,
     signal: AbortSignal,
-    timeoutMs: number = 100_000,
+    inactivityTimeoutMs: number = 60_000,
     onThought?: (thoughtText: string) => void
   ): Promise<void> {
     let timer: NodeJS.Timeout | null = null;
+    let rejectTimeout: ((err: Error) => void) | null = null;
+
+    const resetTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        rejectTimeout?.(new Error("STREAM_TIMEOUT"));
+      }, inactivityTimeoutMs);
+    };
+
     try {
       await Promise.race([
         (async () => {
+          resetTimer();
           for await (const chunk of stream) {
             if (signal.aborted) throw new Error("Request aborted");
+            resetTimer();
             if (
               chunk &&
               typeof chunk === "object" &&
@@ -139,7 +151,8 @@ export class ProcessingHelper {
           }
         })(),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("STREAM_TIMEOUT")), timeoutMs);
+          rejectTimeout = reject;
+          resetTimer();
         }),
       ]);
     } finally {
@@ -316,6 +329,7 @@ export class ProcessingHelper {
       return;
     }
 
+    const requestId = ++this.currentRequestId;
     this.isCurrentlyProcessing = true;
     const mainWindow = this.deps.getMainWindow();
     if (!mainWindow) {
@@ -413,6 +427,7 @@ export class ProcessingHelper {
           );
 
           if (!result.success) {
+            if (this.currentRequestId !== requestId) return;
             const errorMessage =
               result.error || "Failed to generate response. Please try again.";
             const normalizedError = errorMessage.toLowerCase();
@@ -450,6 +465,7 @@ export class ProcessingHelper {
             return;
           }
 
+          if (this.currentRequestId !== requestId) return;
           // Only set view to response if processing succeeded
           console.log("Setting view to response after successful processing");
           // Save to local history (main export)
@@ -460,6 +476,7 @@ export class ProcessingHelper {
           mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.RESPONSE_SUCCESS, { response: result.data });
           this.deps.setView("response");
         } catch (error: any) {
+          if (this.currentRequestId !== requestId) return;
           console.error("Processing error:", error);
           
           if (error.message === "Request aborted" || error.name === "AbortError") {
@@ -509,18 +526,21 @@ export class ProcessingHelper {
           );
 
           if (result.success) {
+            if (this.currentRequestId !== requestId) return;
             this.deps.setHasFollowedUp(true);
             mainWindow.webContents.send(
               this.deps.PROCESSING_EVENTS.FOLLOW_UP_SUCCESS,
               { response: result.data }
             );
           } else {
+            if (this.currentRequestId !== requestId) return;
             mainWindow.webContents.send(
               this.deps.PROCESSING_EVENTS.FOLLOW_UP_ERROR,
               result.error
             );
           }
         } catch (error: any) {
+          if (this.currentRequestId !== requestId) return;
           if (error.message === "Request aborted" || error.name === "AbortError") {
             mainWindow.webContents.send(
               this.deps.PROCESSING_EVENTS.FOLLOW_UP_ERROR,
@@ -537,8 +557,10 @@ export class ProcessingHelper {
         }
       }
     } finally {
-      this.isCurrentlyProcessing = false; // Ensure flag is reset
-      this.clearProcessingTimeouts(); // Clean up any timeouts
+      if (this.currentRequestId === requestId) {
+        this.isCurrentlyProcessing = false; // Ensure flag is reset
+        this.clearProcessingTimeouts(); // Clean up any timeouts
+      }
     }
   }
 
@@ -702,19 +724,17 @@ export class ProcessingHelper {
       promptLines.push(
         `---`,
         `COMPREHENSIVE REASONING & RIGOROUS VERIFICATION DIRECTIVES:`,
-        `When formulating thoughts and reasoning through the problem, prioritize absolute mathematical, logical, and factual accuracy above all else:`,
+        `When formulating thoughts and reasoning through the problem, prioritize absolute mathematical, logical, and factual accuracy with focused, decisive progress:`,
         `1. Complete Analytical & Mathematical Rigor:`,
-        `   - Never rush, approximate, or omit intermediate steps. Accuracy is paramount.`,
         `   - For math, science, and quantitative problems: write out explicit, full step-by-step derivations. Calculate every intermediate value cleanly. Verify all signs, arithmetic operations, algebraic transformations, formulas, units, and boundary conditions.`,
         `   - For coding: thoroughly trace execution flow, state mutations, complexity, and critical edge cases (null/empty inputs, bounds, off-by-one errors).`,
-        `   - For multiple-choice & reading comprehension: scrutinize the exact wording, condition qualifiers (e.g. NOT, EXCEPT, LEAST, ALWAYS), and thoroughly verify why the chosen option is definitively correct and why all other options are eliminated.`,
-        `2. Multi-Pass Solution Verification:`,
-        `   - Take multiple verification passes before finalizing: actively pressure-test your answer against the visual evidence and problem statement.`,
-        `   - Double-check arithmetic by calculating from an alternate direction or plugging the result back into original equations.`,
-        `   - If an inconsistency or error is detected, systematically resolve the discrepancy and re-verify the corrected result.`,
-        `3. Systematic Forward Progression (Anti-Looping):`,
-        `   - Deep, thorough thinking is required, but remain systematic and purposeful. Do not cycle in aimless self-doubt or repeat identical considerations without making progress.`,
-        `   - Once each derivation step is mathematically and logically validated, build forward upon it with complete confidence.`,
+        `   - For multiple-choice & reading comprehension: scrutinize the exact wording, condition qualifiers (e.g. NOT, EXCEPT, LEAST, ALWAYS), and confirm why the chosen option is correct and why other options fail.`,
+        `2. Purposeful, Non-Redundant Verification:`,
+        `   - Verify calculations and logic decisively with a single, rigorous confirmation pass (e.g. sanity-checking against boundary conditions or plugging the result back into original constraints).`,
+        `   - Do not re-derive solved steps from scratch or generate repetitive parallel derivations. Once a step is validated, lock it in and advance forward.`,
+        `   - Calibrate depth to problem difficulty: straightforward questions need only a swift sanity check, while complex multi-step problems warrant a methodical derivation.`,
+        `3. Decisive Transition to Output:`,
+        `   - As soon as the solution is verified, immediately proceed to generating the final response.`,
         ``,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
@@ -773,7 +793,7 @@ export class ProcessingHelper {
               }
             },
             signal,
-            100_000,
+            60_000,
             (thoughtText) => {
               accumulatedThinking += thoughtText;
               if (mainWindow && !mainWindow.isDestroyed()) {
@@ -872,7 +892,7 @@ export class ProcessingHelper {
             }
           },
           signal,
-          100_000,
+          60_000,
           (thoughtText) => {
             accumulatedThinking += thoughtText;
             if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1121,19 +1141,17 @@ export class ProcessingHelper {
       promptLines.push(
         `---`,
         `COMPREHENSIVE REASONING & RIGOROUS VERIFICATION DIRECTIVES:`,
-        `When formulating thoughts and reasoning through the problem, prioritize absolute mathematical, logical, and factual accuracy above all else:`,
+        `When formulating thoughts and reasoning through the problem, prioritize absolute mathematical, logical, and factual accuracy with focused, decisive progress:`,
         `1. Complete Analytical & Mathematical Rigor:`,
-        `   - Never rush, approximate, or omit intermediate steps. Accuracy is paramount.`,
         `   - For math, science, and quantitative problems: write out explicit, full step-by-step derivations. Calculate every intermediate value cleanly. Verify all signs, arithmetic operations, algebraic transformations, formulas, units, and boundary conditions.`,
         `   - For coding: thoroughly trace execution flow, state mutations, complexity, and critical edge cases (null/empty inputs, bounds, off-by-one errors).`,
-        `   - For multiple-choice & reading comprehension: scrutinize the exact wording, condition qualifiers (e.g. NOT, EXCEPT, LEAST, ALWAYS), and thoroughly verify why the chosen option is definitively correct and why all other options are eliminated.`,
-        `2. Multi-Pass Solution Verification:`,
-        `   - Take multiple verification passes before finalizing: actively pressure-test your answer against the visual evidence and problem statement.`,
-        `   - Double-check arithmetic by calculating from an alternate direction or plugging the result back into original equations.`,
-        `   - If an inconsistency or error is detected, systematically resolve the discrepancy and re-verify the corrected result.`,
-        `3. Systematic Forward Progression (Anti-Looping):`,
-        `   - Deep, thorough thinking is required, but remain systematic and purposeful. Do not cycle in aimless self-doubt or repeat identical considerations without making progress.`,
-        `   - Once each derivation step is mathematically and logically validated, build forward upon it with complete confidence.`,
+        `   - For multiple-choice & reading comprehension: scrutinize the exact wording, condition qualifiers (e.g. NOT, EXCEPT, LEAST, ALWAYS), and confirm why the chosen option is correct and why other options fail.`,
+        `2. Purposeful, Non-Redundant Verification:`,
+        `   - Verify calculations and logic decisively with a single, rigorous confirmation pass (e.g. sanity-checking against boundary conditions or plugging the result back into original constraints).`,
+        `   - Do not re-derive solved steps from scratch or generate repetitive parallel derivations. Once a step is validated, lock it in and advance forward.`,
+        `   - Calibrate depth to problem difficulty: straightforward questions need only a swift sanity check, while complex multi-step problems warrant a methodical derivation.`,
+        `3. Decisive Transition to Output:`,
+        `   - As soon as the solution is verified, immediately proceed to generating the final response.`,
         ``,
         `Your response MUST follow this structure, using Markdown headings:`,
         ``,
@@ -1193,7 +1211,7 @@ export class ProcessingHelper {
               }
             },
             signal,
-            100_000,
+            60_000,
             (thoughtText) => {
               accumulatedThinking += thoughtText;
               if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1290,7 +1308,7 @@ export class ProcessingHelper {
             }
           },
           signal,
-          100_000,
+          60_000,
           (thoughtText) => {
             accumulatedThinking += thoughtText;
             if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1375,7 +1393,8 @@ export class ProcessingHelper {
   // ============================================================================
   // BUG FIX: Enhanced Request Cancellation with Comprehensive Cleanup
   // ============================================================================
-  public cancelOngoingRequests(): void {
+  public cancelOngoingRequests(options?: { suppressResetEvent?: boolean }): void {
+    this.currentRequestId++;
     let wasCancelled = false;
 
     // Safely abort all controllers with better error handling
@@ -1407,7 +1426,7 @@ export class ProcessingHelper {
 
     const mainWindow = this.deps.getMainWindow();
 
-    if (wasCancelled && mainWindow && !mainWindow.isDestroyed()) {
+    if (!options?.suppressResetEvent && wasCancelled && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(this.deps.PROCESSING_EVENTS.RESET);
     }
   }
