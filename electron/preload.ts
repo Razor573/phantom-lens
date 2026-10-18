@@ -83,7 +83,7 @@ interface ElectronAPI {
     };
     error?: string;
   }>;
-  listVertexModels: () => Promise<{
+  listVertexModels: (testParams?: { key?: string; projectId?: string; location?: string }) => Promise<{
     success: boolean;
     data?: {
       models: Array<{ id: string; name: string }>;
@@ -325,12 +325,12 @@ const electronAPI = {
   getStoreValue: (key: string) => ipcRenderer.invoke("get-store-value", key),
   setStoreValue: (key: string, value: any) =>
     ipcRenderer.invoke("set-store-value", key, value),
-  setApiConfig: (config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string }) =>
+  setApiConfig: (config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string; webSearch?: boolean }) =>
     ipcRenderer.invoke("set-api-config", config),
   getApiConfig: () => ipcRenderer.invoke("get-api-config"),
   listGeminiModels: () => ipcRenderer.invoke("list-gemini-models"),
   listGroqModels: () => ipcRenderer.invoke("list-groq-models"),
-  listVertexModels: () => ipcRenderer.invoke("list-vertex-models"),
+  listVertexModels: (testParams?: { key?: string; projectId?: string; location?: string }) => ipcRenderer.invoke("list-vertex-models", testParams),
   onApiKeyUpdated: (callback: () => void) => {
     const subscription = () => callback();
     ipcRenderer.on("api-key-updated", subscription);

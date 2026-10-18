@@ -84,7 +84,7 @@ interface Window {
       };
       error?: string;
     }>;
-    listVertexModels: () => Promise<{
+    listVertexModels: (testParams?: { key?: string; projectId?: string; location?: string }) => Promise<{
       success: boolean;
       data?: {
         models: Array<{ id: string; name: string }>;

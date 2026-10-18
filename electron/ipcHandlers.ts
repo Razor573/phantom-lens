@@ -268,16 +268,34 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   // Vertex AI: dynamic catalogue from the publisher models API, authenticated
   // with the user's gcloud ADC (same pattern as listGeminiModels).
-  ipcMain.handle("list-vertex-models", createSafeIpcHandler(async () => {
+  // Accepts optional test params to validate a pasted-but-unsaved key.
+  ipcMain.handle("list-vertex-models", createSafeIpcHandler(async (_event: any, testParams?: { key?: string; projectId?: string; location?: string }) => {
     try {
-      const { vertexAIService } = require("./services/VertexAIService");
-      await ensureVertexCredentials();
-      const projectId = (await getStoreValue("vertex-project")) || "";
-      const location = (await getStoreValue("vertex-location")) || "europe-west2";
+      const { vertexAIService, VertexAIService } = require("./services/VertexAIService");
+      let service = vertexAIService;
+      let projectId: string;
+      let location: string;
+      if (testParams && (testParams.key || testParams.projectId)) {
+        // Test mode: use the provided key/project without saving anything.
+        const testKey = (testParams.key || "").trim();
+        if (testKey) {
+          VertexAIService.validateServiceAccountJson(testKey);
+          service = new VertexAIService();
+          service.setServiceAccountJson(testKey);
+        } else {
+          await ensureVertexCredentials();
+        }
+        projectId = (testParams.projectId || "").trim();
+        location = (testParams.location || "europe-west2").trim() || "europe-west2";
+      } else {
+        await ensureVertexCredentials();
+        projectId = (await getStoreValue("vertex-project")) || "";
+        location = (await getStoreValue("vertex-location")) || "europe-west2";
+      }
       if (!projectId) {
         return { success: false, error: "Set your GCP project ID first" };
       }
-      const models = await vertexAIService.listModels(projectId, location);
+      const models = await service.listModels(projectId, location);
       return { success: true, data: { models } };
     } catch (error: any) {
       console.error("Error listing Vertex AI models:", error);

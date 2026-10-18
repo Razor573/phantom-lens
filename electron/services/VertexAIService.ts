@@ -52,10 +52,18 @@ export class VertexAIService {
   /** Validate pasted key JSON early so settings can show a clear error. */
   static validateServiceAccountJson(json: string): void {
     let parsed: any;
+    // Strip BOM / zero-width chars that sneak in when copying from editors.
+    const cleaned = (json || "").replace(/^﻿/, "").trim();
     try {
-      parsed = JSON.parse(json);
+      parsed = JSON.parse(cleaned);
     } catch {
       throw new Error("That isn't valid JSON - paste the full key file contents.");
+    }
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("That isn't a service account key object.");
+    }
+    if (parsed.type && parsed.type !== "service_account") {
+      throw new Error(`That looks like a "${parsed.type}" key, not a service account key.`);
     }
     if (!parsed.client_email || !parsed.private_key) {
       throw new Error(

@@ -151,6 +151,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Pasted service-account JSON key (no CLI needed). Write-only in the UI.
   const [vertexKey, setVertexKey] = useState("");
   const [vertexKeySaved, setVertexKeySaved] = useState(false);
+  const [vertexTestResult, setVertexTestResult] = useState<string | null>(null);
+  const [vertexTestLoading, setVertexTestLoading] = useState(false);
   // Human-readable summary of what the backend actually has saved, so the
   // active provider is unambiguous even if the radio state lags.
   const [activeConfigSummary, setActiveConfigSummary] = useState("");
@@ -493,6 +495,30 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
       );
     }
   }, [refreshModelList]);
+
+  // Test the Vertex AI connection with the current form values (pasted key
+  // if present, otherwise the saved one) without saving anything.
+  const handleTestVertexConnection = useCallback(async () => {
+    setVertexTestResult(null);
+    setVertexTestLoading(true);
+    try {
+      const response = await window.electronAPI.listVertexModels({
+        key: vertexKeyRef.current.trim() || undefined,
+        projectId: vertexProjectRef.current.trim() || undefined,
+        location: vertexLocationRef.current.trim() || undefined,
+      });
+      if (response?.success && response.data) {
+        const n = response.data.models.length;
+        setVertexTestResult(`Connected - ${n} model${n === 1 ? "" : "s"} available.`);
+      } else {
+        setVertexTestResult(`Failed: ${response?.error || "unknown error"}`);
+      }
+    } catch (err: any) {
+      setVertexTestResult(`Failed: ${err?.message || "unknown error"}`);
+    } finally {
+      setVertexTestLoading(false);
+    }
+  }, []);
 
   const handleSaveConfig = useCallback(async () => {
     setIsLoading(true);
@@ -1154,6 +1180,26 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                           style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
                         />
                         <p className="text-[11px] text-white/50 mt-1 text-center">Cloud Console - IAM &amp; Admin - Service Accounts - create one with the "Vertex AI User" role, add a JSON key, paste it here.</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!isInteractive || vertexTestLoading) return;
+                            handleTestVertexConnection();
+                          }}
+                          disabled={!isInteractive || vertexTestLoading}
+                          tabIndex={isInteractive ? 0 : -1}
+                          className={`mt-2 w-full px-4 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 ${isTransparent ? '' : 'bg-white/10 border border-white/20'} ${
+                            isInteractive ? 'hover:bg-white/20 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/20' : 'cursor-default'
+                          } text-white/80`}
+                          style={isTransparent ? { background: 'transparent', border: 'none' } : {}}
+                        >
+                          {vertexTestLoading ? "Testing..." : "Test connection"}
+                        </button>
+                        {vertexTestResult ? (
+                          <p className={`text-[11px] mt-1 text-center ${vertexTestResult.startsWith("Connected") ? "text-green-400/90" : "text-red-400/90"}`}>
+                            {vertexTestResult}
+                          </p>
+                        ) : null}
                       </div>
                     </>
                   ) : (
