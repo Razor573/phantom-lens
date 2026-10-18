@@ -151,6 +151,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Pasted service-account JSON key (no CLI needed). Write-only in the UI.
   const [vertexKey, setVertexKey] = useState("");
   const [vertexKeySaved, setVertexKeySaved] = useState(false);
+  // Human-readable summary of what the backend actually has saved, so the
+  // active provider is unambiguous even if the radio state lags.
+  const [activeConfigSummary, setActiveConfigSummary] = useState("");
   const defaultModel = MODEL_OPTIONS.find(m => m.default)?.id || "gemini-2.5-flash";
   const [selectedModel, setSelectedModel] = useState(defaultModel);
   const [availableModels, setAvailableModels] = useState(MODEL_OPTIONS);
@@ -317,10 +320,18 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           if (configData.vertexProject) setVertexProject(configData.vertexProject);
           if (configData.vertexLocation) setVertexLocation(configData.vertexLocation);
           setVertexKeySaved(!!configData.vertexKeySaved);
-        } else if (configData.apiKey) {
-          console.log("Setting API key from config");
-          if (prov === "groq") setGroqApiKey(configData.apiKey);
-          else setApiKey(configData.apiKey);
+          setActiveConfigSummary(
+            `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""}`.trim()
+          );
+        } else {
+          if (configData.apiKey) {
+            console.log("Setting API key from config");
+            if (prov === "groq") setGroqApiKey(configData.apiKey);
+            else setApiKey(configData.apiKey);
+          }
+          setActiveConfigSummary(
+            `${prov === "groq" ? "Groq" : "Gemini"} API · ${configData.model || ""}`.trim()
+          );
         }
         if (configData.model) {
           console.log("Setting model from config:", configData.model);
@@ -504,6 +515,16 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         await loadCurrentConfig();
         // The key field is write-only: clear it after saving.
         if (provider === "vertex") setVertexKey("");
+        // Update the "currently using" line immediately from what we saved.
+        if (provider === "vertex") {
+          setActiveConfigSummary(
+            `Vertex AI · ${vertexProjectRef.current || "no project"} · ${selectedModel}`.trim()
+          );
+        } else {
+          setActiveConfigSummary(
+            `${provider === "groq" ? "Groq" : "Gemini"} API · ${selectedModel}`.trim()
+          );
+        }
       } else {
         console.error("Failed to save configuration:", response?.error);
         setError(response?.error || "Failed to save configuration");
@@ -1049,6 +1070,11 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                       </button>
                     ))}
                   </div>
+                  {activeConfigSummary ? (
+                    <p className="text-[11px] text-white/60 mt-1.5 text-center">
+                      Currently using: <span className="text-white/90 font-medium">{activeConfigSummary}</span>
+                    </p>
+                  ) : null}
                   </div>
                   {provider === "vertex" ? (
                     <>
