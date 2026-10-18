@@ -109,12 +109,15 @@ export class VertexAIService {
     location: string
   ): Promise<Array<{ id: string; name: string }>> {
     const token = await this.getAccessToken();
-    const url =
-      `https://${location}-aiplatform.googleapis.com/v1` +
-      `/projects/${encodeURIComponent(projectId)}` +
-      `/locations/${encodeURIComponent(location)}/publishers/google/models`;
+    // Publisher catalogue is a global Model Garden endpoint: no project or
+    // location in the path - the project goes in x-goog-user-project.
+    // (docs: publishers.models.list - GET /v1/publishers/{publisher}/models)
+    const url = `https://${location}-aiplatform.googleapis.com/v1/publishers/google/models`;
     const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "x-goog-user-project": projectId,
+      },
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
