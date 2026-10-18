@@ -160,6 +160,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   // Thinking level for Gemini 3 models (LOW/MEDIUM/HIGH). Only sent for
   // gemini-3* models; the API default when unset is MEDIUM.
   const [thinkingLevel, setThinkingLevel] = useState("MEDIUM");
+  // Google Search grounding (Gemini + Vertex AI only; Groq has no equivalent).
+  // Off by default - grounded queries are billed per search.
+  const [webSearch, setWebSearch] = useState(false);
   // Refs mirror the latest state so the callbacks below stay stable.
   // Without these, changing the selection/keystroke would recreate the
   // callbacks and re-trigger the "load on open" effect, snapping the
@@ -173,6 +176,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   const vertexKeySavedRef = useRef(vertexKeySaved);
   const selectedModelRef = useRef(selectedModel);
   const thinkingLevelRef = useRef(thinkingLevel);
+  const webSearchRef = useRef(webSearch);
   useEffect(() => {
     apiKeyRef.current = apiKey;
   }, [apiKey]);
@@ -194,6 +198,9 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
   useEffect(() => {
     vertexKeySavedRef.current = vertexKeySaved;
   }, [vertexKeySaved]);
+  useEffect(() => {
+    webSearchRef.current = webSearch;
+  }, [webSearch]);
   useEffect(() => {
     selectedModelRef.current = selectedModel;
   }, [selectedModel]);
@@ -325,7 +332,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
           if (configData.vertexLocation) setVertexLocation(configData.vertexLocation);
           setVertexKeySaved(!!configData.vertexKeySaved);
           setActiveConfigSummary(
-            `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""} · key ${configData.vertexKeySaved ? "saved" : "missing - paste it below"}`.trim()
+            `Vertex AI · ${configData.vertexProject || "no project"} · ${configData.model || ""} · key ${configData.vertexKeySaved ? "saved" : "missing - paste it below"}${configData.webSearch ? " · web search on" : ""}`.trim()
           );
         } else {
           if (configData.apiKey) {
@@ -334,7 +341,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
             else setApiKey(configData.apiKey);
           }
           setActiveConfigSummary(
-            `${prov === "groq" ? "Groq" : "Gemini"} API · ${configData.model || ""}`.trim()
+            `${prov === "groq" ? "Groq" : "Gemini"} API · ${configData.model || ""}${configData.webSearch && prov !== "groq" ? " · web search on" : ""}`.trim()
           );
         }
         if (configData.model) {
@@ -344,6 +351,7 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (configData.thinkingLevel && ["LOW", "MEDIUM", "HIGH"].includes(configData.thinkingLevel)) {
           setThinkingLevel(configData.thinkingLevel);
         }
+        setWebSearch(configData.webSearch === true);
         if (prov === "vertex") {
           await refreshModelList(undefined, configData.model, prov);
         } else if (configData.apiKey) {
@@ -508,6 +516,8 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         vertexLocation: vertexLocationRef.current,
         // Pasted service-account key (empty = keep the saved one).
         vertexServiceAccount: vertexKeyRef.current,
+        // Google Search grounding (Gemini + Vertex AI only).
+        webSearch: webSearchRef.current,
       });
       
       console.log("API config save response:", response);
@@ -523,11 +533,11 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
         if (provider === "vertex") {
           const keyNowSaved = !!vertexKeyRef.current.trim() || vertexKeySavedRef.current;
           setActiveConfigSummary(
-            `Vertex AI · ${vertexProjectRef.current || "no project"} · ${selectedModel} · key ${keyNowSaved ? "saved" : "missing - paste it below"}`.trim()
+            `Vertex AI · ${vertexProjectRef.current || "no project"} · ${selectedModel} · key ${keyNowSaved ? "saved" : "missing - paste it below"}${webSearchRef.current ? " · web search on" : ""}`.trim()
           );
         } else {
           setActiveConfigSummary(
-            `${provider === "groq" ? "Groq" : "Gemini"} API · ${selectedModel}`.trim()
+            `${provider === "groq" ? "Groq" : "Gemini"} API · ${selectedModel}${webSearchRef.current && provider !== "groq" ? " · web search on" : ""}`.trim()
           );
         }
       } else {
@@ -1218,6 +1228,25 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
                         <option value="HIGH" className="bg-gray-800 text-white">High - deepest reasoning</option>
                       </select>
                       <p className="text-[11px] text-white/50 mt-1 text-center">Applies to Gemini 3/4 models. Higher thinking costs more and is slower.</p>
+                    </div>
+                  )}
+                  {(provider === "gemini" || provider === "vertex") && (
+                    <div className="mt-2">
+                      <label className="flex items-center justify-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={webSearch}
+                          onChange={(e) => {
+                            if (!isInteractive) return;
+                            setWebSearch(e.target.checked);
+                          }}
+                          disabled={!isInteractive}
+                          tabIndex={isInteractive ? 0 : -1}
+                          className="w-4 h-4 rounded accent-blue-500"
+                        />
+                        <span className="text-xs text-white/70">Web search</span>
+                      </label>
+                      <p className="text-[11px] text-white/50 mt-1 text-center">Let the model search Google for live info. Billed per search query.</p>
                     </div>
                   )}
                 <button

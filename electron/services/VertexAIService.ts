@@ -140,6 +140,7 @@ export class VertexAIService {
     prompt: string;
     base64Images: string[];
     thinkingLevel?: string;
+    webSearch?: boolean;
     signal: AbortSignal;
   }): AsyncGenerator<string> {
     const token = await this.getAccessToken();
@@ -172,6 +173,9 @@ export class VertexAIService {
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig,
+        // Google Search grounding: the model can search the live web.
+        // Billed per search query (5k free/month on Gemini 3.x, then $14/1k).
+        ...(opts.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
       }),
       signal: opts.signal,
     });

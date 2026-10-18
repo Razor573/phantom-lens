@@ -83,6 +83,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       const vertexProject = (await getStoreValue("vertex-project")) || "";
       const vertexLocation = (await getStoreValue("vertex-location")) || "europe-west2";
       const vertexKeySaved = !!((await getStoreValue("vertex-service-account")) || "");
+      const webSearch = (await getStoreValue("web-search")) === true;
 
       // Vertex AI uses gcloud ADC instead of an API key: project + location.
       if (provider === "vertex") {
@@ -91,7 +92,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         }
         return {
           success: true,
-          data: { apiKey: "", model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved }
+          data: { apiKey: "", model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved, webSearch }
         };
       }
 
@@ -104,7 +105,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
       return {
         success: true,
-        data: { apiKey, model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved }
+        data: { apiKey, model, provider, thinkingLevel, vertexProject, vertexLocation, vertexKeySaved, webSearch }
       };
     } catch (error: any) {
       console.error("Error getting API config:", error);
@@ -114,7 +115,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
   ipcMain.handle("set-api-config", createSafeIpcHandler(async (
     _event: any,
-    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string }
+    config: { apiKey: string; model: string; provider?: string; thinkingLevel?: string; vertexProject?: string; vertexLocation?: string; vertexServiceAccount?: string; webSearch?: boolean }
   ) => {
     try {
       const { apiKey, model } = config;
@@ -146,12 +147,14 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         const thinkingLevel = ["LOW", "MEDIUM", "HIGH"].includes(config.thinkingLevel || "")
           ? config.thinkingLevel!
           : "MEDIUM";
+        const webSearch = config.webSearch === true;
         const saves: Promise<boolean>[] = [
           setStoreValue("vertex-project", vertexProject),
           setStoreValue("vertex-location", vertexLocation),
           setStoreValue("api-model", model.trim()),
           setStoreValue("api-provider", provider),
-          setStoreValue("gemini-thinking-level", thinkingLevel)
+          setStoreValue("gemini-thinking-level", thinkingLevel),
+          setStoreValue("web-search", webSearch)
         ];
         if (pastedKey) saves.push(setStoreValue("vertex-service-account", pastedKey));
         const results = await Promise.all(saves);
@@ -169,7 +172,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
         }
         const vertexKeySaved = pastedKey ? true : !!((await getStoreValue("vertex-service-account")) || "");
         console.log(`API configuration saved: Provider=vertex, Model=${model.trim()}, Project=${vertexProject}`);
-        return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject, vertexLocation, vertexKeySaved } };
+        return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject, vertexLocation, vertexKeySaved, webSearch } };
       }
 
       const keyName = provider === "groq" ? "groq-api-key" : "api-key";
@@ -193,14 +196,16 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
 
       // Store the configuration (keys are kept per-provider so switching
       // providers never loses the other provider's key)
-      const [successKey, successModel, successProvider, successThinking] = await Promise.all([
+      const webSearch = config.webSearch === true;
+      const [successKey, successModel, successProvider, successThinking, successWebSearch] = await Promise.all([
         setStoreValue(keyName, apiKey.trim()),
         setStoreValue("api-model", model.trim()),
         setStoreValue("api-provider", provider),
-        setStoreValue("gemini-thinking-level", thinkingLevel)
+        setStoreValue("gemini-thinking-level", thinkingLevel),
+        setStoreValue("web-search", webSearch)
       ]);
 
-      if (!successKey || !successModel || !successProvider || !successThinking) {
+      if (!successKey || !successModel || !successProvider || !successThinking || !successWebSearch) {
         console.error("Failed to save one or more API config values to store.");
         return {
           success: false,
@@ -220,7 +225,7 @@ export function initializeIpcHandlers(deps: initializeIpcHandlerDeps): void {
       }
 
       console.log(`API configuration saved: Model=${model.trim()}`);
-      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject: "", vertexLocation: "", vertexKeySaved: false } };
+      return { success: true, data: { apiKey: "***", model: model.trim(), thinkingLevel, vertexProject: "", vertexLocation: "", vertexKeySaved: false, webSearch } };
       
     } catch (error: any) {
       console.error("Error setting API configuration:", error);

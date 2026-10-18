@@ -392,6 +392,7 @@ export interface IProcessingHelperDeps {
   setView: (view: "initial" | "response" | "followup") => void;
   getConfiguredModel: () => Promise<string>;
   getConfiguredThinkingLevel: () => Promise<string>;
+  getWebSearchEnabled: () => Promise<boolean>;
   setHasFollowedUp: (hasFollowedUp: boolean) => void;
   clearQueues: () => void;
   PROCESSING_EVENTS: typeof state.PROCESSING_EVENTS;
@@ -1041,6 +1042,7 @@ function initializeHelpers() {
     PROCESSING_EVENTS: state.PROCESSING_EVENTS,
     getConfiguredModel,
     getConfiguredThinkingLevel,
+    getWebSearchEnabled,
     getUserPrompt: () => state.currentPrompt,
     clearUserPrompt: () => { state.currentPrompt = null; },
     getPreviousResponse: () => state.processingHelper?.getPreviousResponse() || null,
@@ -1710,6 +1712,16 @@ async function getConfiguredThinkingLevel(): Promise<string> {
     console.error("Error getting thinking level from store:", error);
   }
   return "MEDIUM";
+}
+
+/** Whether Google Search grounding is enabled (Gemini + Vertex AI providers). Off by default. */
+async function getWebSearchEnabled(): Promise<boolean> {
+  try {
+    return (await getStoreValue("web-search")) === true;
+  } catch (error) {
+    console.error("Error getting web search setting from store:", error);
+  }
+  return false;
 }
 
 

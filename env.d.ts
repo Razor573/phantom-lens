@@ -54,6 +54,7 @@ interface Window {
       vertexProject?: string;
       vertexLocation?: string;
       vertexServiceAccount?: string;
+      webSearch?: boolean;
     }) => Promise<{ success: boolean; error?: string }>;
     getApiConfig: () => Promise<{
       success: boolean;
@@ -65,6 +66,7 @@ interface Window {
         vertexProject?: string;
         vertexLocation?: string;
         vertexKeySaved?: boolean;
+        webSearch?: boolean;
       };
       error?: string;
     }>;

@@ -169,6 +169,7 @@ export class ProcessingHelper {
     }
     const thinkingLevel =
       (await this.deps.getConfiguredThinkingLevel?.()) || "MEDIUM";
+    const webSearch = (await this.deps.getWebSearchEnabled?.()) || false;
     yield* vertexAIService.streamGenerateContent({
       projectId,
       location,
@@ -176,6 +177,7 @@ export class ProcessingHelper {
       prompt,
       base64Images,
       thinkingLevel,
+      webSearch,
       signal,
     });
   }
@@ -606,9 +608,13 @@ export class ProcessingHelper {
       const generationConfig = /^gemini-3/.test(model)
         ? ({ thinkingConfig: { thinkingLevel } } as any)
         : undefined;
+      // Google Search grounding: off by default (billed per search query).
+      // Passed untyped like thinkingConfig - plain JSON at runtime.
+      const webSearch = (await this.deps.getWebSearchEnabled?.()) || false;
       const geminiModel = genAI.getGenerativeModel({
         model: geminiModelId,
         ...(generationConfig ? { generationConfig } : {}),
+        ...(webSearch ? { tools: [{ googleSearch: {} }] as any } : {}),
       });
 
       const imageParts = base64Images.map((data) => ({
@@ -971,9 +977,12 @@ export class ProcessingHelper {
       const generationConfig = /^gemini-3/.test(model)
         ? ({ thinkingConfig: { thinkingLevel } } as any)
         : undefined;
+      // Google Search grounding: off by default (billed per search query).
+      const webSearch = (await this.deps.getWebSearchEnabled?.()) || false;
       const geminiModel = genAI.getGenerativeModel({
         model: geminiModelId,
         ...(generationConfig ? { generationConfig } : {}),
+        ...(webSearch ? { tools: [{ googleSearch: {} }] as any } : {}),
       });
 
       const imageParts = validBase64Images.map((data) => ({

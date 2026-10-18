@@ -53,6 +53,7 @@ interface ElectronAPI {
     vertexProject?: string;
     vertexLocation?: string;
     vertexServiceAccount?: string;
+    webSearch?: boolean;
   }) => Promise<{ success: boolean; error?: string }>;
   getApiConfig: () => Promise<{
     success: boolean;
@@ -64,6 +65,7 @@ interface ElectronAPI {
       vertexProject?: string;
       vertexLocation?: string;
       vertexKeySaved?: boolean;
+      webSearch?: boolean;
     };
     error?: string;
   }>;
