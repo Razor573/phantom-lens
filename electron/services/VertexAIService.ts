@@ -195,10 +195,10 @@ export class VertexAIService {
     let res: Response | null = null;
     let lastError = "";
     for (const loc of locations) {
-      // v1beta1 for prediction (v1 404s on the publishers path for some
-      // regions; v1beta1 is the documented publishers.models path).
+      // v1 is the documented publishers path for prediction:
+      // /v1/projects/{project}/locations/{location}/publishers/google/models/{model}:streamGenerateContent
       const url =
-        `https://${loc}-aiplatform.googleapis.com/v1beta1` +
+        `https://${loc}-aiplatform.googleapis.com/v1` +
         `/projects/${encodeURIComponent(opts.projectId)}` +
         `/locations/${encodeURIComponent(loc)}` +
         `/publishers/google/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`;
