@@ -111,8 +111,9 @@ export class VertexAIService {
     const token = await this.getAccessToken();
     // Publisher catalogue is a global Model Garden endpoint: no project or
     // location in the path - the project goes in x-goog-user-project.
-    // (docs: publishers.models.list - GET /v1/publishers/{publisher}/models)
-    const url = `https://${location}-aiplatform.googleapis.com/v1/publishers/google/models`;
+    // (docs: publishers.models.list is v1beta1-only -
+    // GET /v1beta1/publishers/{publisher}/models)
+    const url = `https://${location}-aiplatform.googleapis.com/v1beta1/publishers/google/models`;
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -121,8 +122,13 @@ export class VertexAIService {
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      // Google returns an HTML error page for 404s - extract the title.
+      const titleMatch = body.match(/<title>([^<]*)<\/title>/i);
+      const detail = titleMatch
+        ? titleMatch[1].trim()
+        : body.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
       throw new Error(
-        `Vertex AI model list failed (HTTP ${res.status}): ${body.slice(0, 200)}`
+        `Vertex AI model list failed (HTTP ${res.status}): ${detail || "no details"}`
       );
     }
     const data: any = await res.json();
