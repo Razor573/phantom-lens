@@ -272,11 +272,9 @@ export async function setStoreValue(key: string, value: any): Promise<boolean> {
       return false;
     }
   }
-  // electron-store's set() returns void (throws on failure), so report
-  // success explicitly - returning its result would always be undefined,
-  // which made every set-api-config save report "Failed to save".
-  store.set(key, value);
-  return true;
+  // The custom file store's set() returns Promise<boolean> (queued disk
+  // write). Await it so callers never read stale data after saving.
+  return await store.set(key, value);
 }
 
 interface ProcessingEvents {
