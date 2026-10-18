@@ -285,10 +285,21 @@ export default function Tooltip({ trigger, onVisibilityChange }: TooltipProps) {
             name: m.name,
             description: m.id,
           }));
+          // Merge live results with the curated static list so known models
+          // (Argon, Flash family) are always available even when the live
+          // catalogue returns a trimmed set. Static list first, live extras
+          // appended, deduped by ID.
+          const seen = new Set<string>();
+          const merged: Array<{ id: string; name: string; description: string }> = [];
+          for (const m of [...VERTEX_MODEL_OPTIONS, ...fetched]) {
+            if (!m.id || seen.has(m.id)) continue;
+            seen.add(m.id);
+            merged.push(m);
+          }
           const keep = (keepModel ?? selectedModelRef.current).trim();
-          const merged = fetched.some((m) => m.id === keep)
-            ? fetched
-            : [...fetched, { id: keep, name: keep, description: "Currently configured model" }];
+          if (keep && !merged.some((m) => m.id === keep)) {
+            merged.push({ id: keep, name: keep, description: "Currently configured model" });
+          }
           setAvailableModels(merged);
         }
       } catch (err) {
