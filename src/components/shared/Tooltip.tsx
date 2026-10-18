@@ -96,7 +96,37 @@ const VERTEX_MODEL_OPTIONS = [
   {
     id: "gemini-3.8-flash",
     name: "Gemini 3.8 Flash",
-    description: "Fast flagship flash model (Google, via Vertex AI)",
+    description: "Latest GA flash model (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    description: "Previous-gen flash model (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-3.6-flash",
+    name: "Gemini 3.6 Flash",
+    description: "Previous-gen flash model (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-3.5-flash",
+    name: "Gemini 3.5 Flash",
+    description: "Agentic/coding flash model (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash-Lite",
+    description: "Low-latency high-volume model (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-3.1-pro-preview",
+    name: "Gemini 3.1 Pro Preview",
+    description: "Strong reasoning preview (Google, via Vertex AI)",
+  },
+  {
+    id: "gemini-3.1-flash-lite",
+    name: "Gemini 3.1 Flash-Lite",
+    description: "Lightweight flash model (Google, via Vertex AI)",
   },
 ];
 

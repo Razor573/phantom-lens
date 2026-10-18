@@ -272,7 +272,11 @@ export async function setStoreValue(key: string, value: any): Promise<boolean> {
       return false;
     }
   }
-  return store.set(key, value);
+  // electron-store's set() returns void (throws on failure), so report
+  // success explicitly - returning its result would always be undefined,
+  // which made every set-api-config save report "Failed to save".
+  store.set(key, value);
+  return true;
 }
 
 interface ProcessingEvents {
