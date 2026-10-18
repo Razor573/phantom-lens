@@ -136,18 +136,19 @@ export class VertexAIService {
       );
     }
     const data: any = await res.json();
-    return (data.publisherModels || [])
-      .filter(
-        (m: any) =>
-          !Array.isArray(m.supportedGenerationMethods) ||
-          m.supportedGenerationMethods.includes("generateContent")
-      )
-      .map((m: any) => {
-        const full = String(m.name || ""); // publishers/google/models/<id>
-        const id = full.split("/").pop() || full;
-        return { id, name: m.displayName || id };
-      })
-      .filter((m: any) => m.id);
+    // Keep only Gemini chat models: the publisher catalogue mixes in
+    // embeddings, Imagen, etc., and listAllVersions=true returns one entry
+    // per version. Filter by ID pattern and dedupe.
+    const seen = new Map<string, { id: string; name: string }>();
+    for (const m of data.publisherModels || []) {
+      const full = String(m.name || ""); // publishers/google/models/<id>
+      const id = full.split("/").pop() || full;
+      if (!id || !/^gemini-/i.test(id) || /embedding/i.test(id)) continue;
+      if (!seen.has(id)) {
+        seen.set(id, { id, name: String(m.displayName || id) });
+      }
+    }
+    return [...seen.values()];
   }
 
   /**
