@@ -84,6 +84,41 @@ export default function Commands({
   } | null>(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
 
+  // Live API status (provider / model / thinking) for the header pill.
+  // Refreshed on mount and whenever main broadcasts a config change
+  // (settings save or the provider/thinking hotkeys).
+  const [apiStatus, setApiStatus] = useState<{
+    provider: string;
+    model: string;
+    thinkingLevel: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const res = await window.electronAPI.getApiConfig();
+        if (!cancelled && res?.success && res.data) {
+          setApiStatus({
+            provider: res.data.provider || "gemini",
+            model: res.data.model || "",
+            thinkingLevel: res.data.thinkingLevel || "MEDIUM",
+          });
+        }
+      } catch {
+        // Config unreadable - leave the pill hidden.
+      }
+    };
+    refresh();
+    const cleanup = window.electronAPI.onApiKeyUpdated?.(() => {
+      refresh();
+    });
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
+  }, []);
+
   // Attached files (natively-style file context)
   const [attachedFiles, setAttachedFiles] = useState<
     Array<{ id: string; name: string; charCount: number; truncated: boolean }>
@@ -684,6 +719,37 @@ export default function Commands({
               ) : null
             )}
           </AnimatePresence>
+
+          {/* Live provider / model / thinking status, pushed to the right
+              end of the bar. Updates on the provider/thinking hotkeys. */}
+          {apiStatus && (
+            <div
+              className="flex items-center flex-shrink-0 min-w-0"
+              style={{ marginLeft: "auto" }}
+              title={`Provider: ${COMMAND_KEY}+Shift+←/→ · Thinking: ${COMMAND_KEY}+Shift+T`}
+            >
+              <span
+                className="text-white whitespace-nowrap overflow-hidden"
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 500,
+                  opacity: isTransparent ? 0.55 : 0.85,
+                  textOverflow: "ellipsis",
+                  maxWidth: "320px",
+                }}
+              >
+                {apiStatus.provider === "vertex"
+                  ? "Vertex"
+                  : apiStatus.provider === "groq"
+                    ? "Groq"
+                    : "Gemini"}
+                {apiStatus.model ? ` · ${apiStatus.model}` : ""}
+                {apiStatus.provider !== "groq"
+                  ? ` · ${apiStatus.thinkingLevel.charAt(0) + apiStatus.thinkingLevel.slice(1).toLowerCase()}`
+                  : ""}
+              </span>
+            </div>
+          )}
 
           {/* Attach / Ask icons - visual only, triggered via shortcuts (Ctrl+O / Ctrl+K) */}
           <div
