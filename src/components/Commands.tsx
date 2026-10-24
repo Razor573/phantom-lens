@@ -726,7 +726,7 @@ export default function Commands({
             <div
               className="flex items-center flex-shrink-0 min-w-0"
               style={{ marginLeft: "auto" }}
-              title={`Provider: ${COMMAND_KEY}+Shift+←/→ · Thinking: ${COMMAND_KEY}+Shift+T`}
+              title={`Provider: ${COMMAND_KEY}+Shift+Alt+←/→ · Thinking: ${COMMAND_KEY}+Shift+Alt+T`}
             >
               <span
                 className="text-white whitespace-nowrap overflow-hidden"
