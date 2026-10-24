@@ -425,8 +425,6 @@ export interface IShortcutsHelperDeps {
   setMode: (mode: "normal"|"stealth") => Promise<void>;
   navigateHistoryPrev: () => void;
   navigateHistoryNext: () => void;
-  cycleProvider: (direction: 1 | -1) => Promise<void>;
-  cycleThinkingLevel: () => Promise<void>;
   scrollResponseBy: (delta: number) => void;
   scrollCodeBlockBy: (delta: number) => void;
   getUserPromptValue: () => string | null;
@@ -1074,8 +1072,6 @@ function initializeHelpers() {
     setMode,
     navigateHistoryPrev,
     navigateHistoryNext,
-    cycleProvider,
-    cycleThinkingLevel,
     scrollResponseBy,
     scrollCodeBlockBy,
     getUserPromptValue: () => state.currentPrompt,
@@ -1717,57 +1713,6 @@ async function getConfiguredThinkingLevel(): Promise<string> {
     console.error("Error getting thinking level from store:", error);
   }
   return "MEDIUM";
-}
-
-/** Tell the renderer the API config changed so status displays refresh. */
-function broadcastApiConfigChanged(): void {
-  try {
-    const mainWindow = getMainWindow();
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("api-key-updated");
-    }
-  } catch (error) {
-    console.error("Failed to broadcast API config change:", error);
-  }
-}
-
-const PROVIDER_CYCLE = ["gemini", "vertex"] as const;
-
-/**
- * Hotkey: step the provider between Gemini and Vertex. Anything outside
- * the cycle (e.g. Groq) jumps to Gemini. The model is kept as-is - Gemini
- * and Vertex share model IDs, so it stays valid across the switch. Takes
- * effect on the next request (provider is read fresh per request).
- */
-async function cycleProvider(direction: 1 | -1): Promise<void> {
-  try {
-    const current = ((await getStoreValue("api-provider")) || "gemini") as string;
-    const idx = (PROVIDER_CYCLE as readonly string[]).indexOf(current);
-    const next =
-      idx === -1
-        ? "gemini"
-        : PROVIDER_CYCLE[(idx + direction + PROVIDER_CYCLE.length) % PROVIDER_CYCLE.length];
-    await setStoreValue("api-provider", next);
-    process.env.API_PROVIDER = next;
-    console.log(`[Shortcuts] Provider switched to ${next} (hotkey)`);
-    broadcastApiConfigChanged();
-  } catch (error) {
-    console.error("Failed to switch provider:", error);
-  }
-}
-
-/** Hotkey: cycle the thinking level Low -> Medium -> High -> Low. */
-async function cycleThinkingLevel(): Promise<void> {
-  try {
-    const current = await getConfiguredThinkingLevel();
-    const idx = (VALID_THINKING_LEVELS as readonly string[]).indexOf(current);
-    const next = VALID_THINKING_LEVELS[(idx === -1 ? 0 : idx + 1) % VALID_THINKING_LEVELS.length];
-    await setStoreValue("gemini-thinking-level", next);
-    console.log(`[Shortcuts] Thinking level switched to ${next} (hotkey)`);
-    broadcastApiConfigChanged();
-  } catch (error) {
-    console.error("Failed to switch thinking level:", error);
-  }
 }
 
 /** Whether Google Search grounding is enabled (Gemini + Vertex AI providers). Off by default. */

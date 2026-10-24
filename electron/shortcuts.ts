@@ -127,23 +127,6 @@ export class ShortcutsHelper {
       "CommandOrControl+Shift+Down": () => {
         this.deps.navigateHistoryNext();
       },
-      // Switch provider (Gemini <-> Vertex) - Ctrl/Cmd + Shift + Alt + Left/Right
-      // Only active while the overlay is visible (registered on show,
-      // unregistered on hide), so this never hijacks word selection in
-      // other apps when Phantom Lens is hidden.
-      "CommandOrControl+Shift+Alt+Left": () => {
-        console.log("Command/Ctrl + Shift + Alt + Left pressed. Switching to previous provider...");
-        void this.deps.cycleProvider(-1);
-      },
-      "CommandOrControl+Shift+Alt+Right": () => {
-        console.log("Command/Ctrl + Shift + Alt + Right pressed. Switching to next provider...");
-        void this.deps.cycleProvider(1);
-      },
-      // Cycle thinking level (Low -> Medium -> High) - Ctrl/Cmd + Shift + Alt + T
-      "CommandOrControl+Shift+Alt+T": () => {
-        console.log("Command/Ctrl + Shift + Alt + T pressed. Cycling thinking level...");
-        void this.deps.cycleThinkingLevel();
-      },
       // Toggle Settings window (open/close)
       "CommandOrControl+,": () => {
         console.log("Command/Ctrl + , pressed. Toggling settings...");
