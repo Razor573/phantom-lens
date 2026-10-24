@@ -807,7 +807,8 @@ export class VertexAIService {
       if (!settled) yield { type: "thought", content: "" };
     }
     if (failure) throw failure;
-    yield { type: "text", content: result as string };
+    if (result === null) throw new Error("Vertex AI fallback produced no text");
+    yield { type: "text", content: result };
   }
 
   /**
