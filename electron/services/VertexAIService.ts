@@ -56,7 +56,7 @@ async function readWithSignal(
   }
 }
 
-/** Fetch with exponential backoff on 429/5xx (transient errors only). */
+/** Fetch with exponential backoff on transient errors. */
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -68,7 +68,11 @@ async function fetchWithRetry(
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (signal.aborted) throw abortError();
     const res = await fetch(url, { ...init, signal });
-    if (res.status === 429 || res.status >= 500) {
+    // 429/409/5xx are transient for idempotent prediction calls: 429 is
+    // throttling, 409 is a serving-side conflict (seen in the wild on
+    // StreamGenerateContent around 2026-10-24 21:27-21:30), 5xx is a server
+    // fault. All are safe to retry because a prediction has no side effects.
+    if (res.status === 429 || res.status === 409 || res.status >= 500) {
       lastRes = res;
       try {
         await res.text();
@@ -329,6 +333,65 @@ export class VertexAIService {
     );
   }
 
+  /** Regions to try, cached winner first, then global + regional fallbacks. */
+  private candidateLocations(projectId: string, modelId: string, requestedLoc: string): string[] {
+    const cacheKey = `${projectId}:${modelId}`;
+    const cachedLoc = this.resolvedModelLocations.get(cacheKey);
+    const isGlobalFirstModel = /^gemini-(3|4)(\.|-)/.test(modelId);
+    const candidateLocs: string[] = [];
+    const pushUnique = (loc?: string) => {
+      if (loc && !candidateLocs.includes(loc)) candidateLocs.push(loc);
+    };
+    if (cachedLoc) pushUnique(cachedLoc);
+    if (requestedLoc === "global" || isGlobalFirstModel) {
+      pushUnique("global");
+      pushUnique(requestedLoc);
+      pushUnique("us-central1");
+      pushUnique("europe-west2");
+    } else {
+      pushUnique(requestedLoc);
+      pushUnique("global");
+      pushUnique("us-central1");
+    }
+    return candidateLocs;
+  }
+
+  /** Shared request body for streaming and single-shot prediction. */
+  private buildBody(opts: {
+    prompt: string;
+    base64Images: string[];
+    thinkingLevel?: string;
+    modelId: string;
+    webSearch?: boolean;
+  }): string {
+    const parts: any[] = [{ text: opts.prompt }];
+    for (const img of opts.base64Images) {
+      parts.push({ inlineData: { mimeType: "image/png", data: img } });
+    }
+    const generationConfig: any = {
+      candidateCount: 1,
+      maxOutputTokens: 12288,
+      temperature: 0.2,
+    };
+    if (opts.thinkingLevel && /^gemini-[34]/.test(opts.modelId)) {
+      generationConfig.thinkingConfig = {
+        thinkingLevel: opts.thinkingLevel,
+        includeThoughts: true,
+      };
+    } else {
+      generationConfig.thinkingConfig = {
+        includeThoughts: true,
+      };
+    }
+    return JSON.stringify({
+      contents: [{ role: "user", parts }],
+      generationConfig,
+      // Google Search grounding: the model can search the live web.
+      // Billed per search query (5k free/month on Gemini 3.x, then $14/1k).
+      ...(opts.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
+    });
+  }
+
   /**
    * One region's attempt at a streaming request: fetch (with backoff on
    * 429/5xx), then read until the first SSE payload with content parts.
@@ -585,13 +648,179 @@ export class VertexAIService {
   }
 
   /**
+   * Non-streaming fallback: one complete GenerateContent call, hedged
+   * across regions (first complete response wins). Used only when
+   * streaming fails before any chunk - the single-shot endpoint has
+   * proven more reliable than the streaming one, and a complete answer
+   * beats an error. Deadline is 45s so it fits inside the caller's 60s
+   * inactivity window and 120s overall timeout.
+   */
+  private async generateContent(opts: {
+    projectId: string;
+    location: string;
+    model: string;
+    prompt: string;
+    base64Images: string[];
+    thinkingLevel?: string;
+    webSearch?: boolean;
+    signal: AbortSignal;
+  }): Promise<string> {
+    const projectId = opts.projectId.trim();
+    const requestedLoc = (opts.location || "global").trim().toLowerCase() || "global";
+    const modelId = opts.model
+      .trim()
+      .replace(/^models\//, "")
+      .replace(/^publishers\/google\/models\//, "");
+    const token = await this.getAccessToken();
+    const body = this.buildBody({
+      prompt: opts.prompt,
+      base64Images: opts.base64Images,
+      thinkingLevel: opts.thinkingLevel,
+      modelId,
+      webSearch: opts.webSearch,
+    });
+    const locs = this.candidateLocations(projectId, modelId, requestedLoc);
+    const cacheKey = `${projectId}:${modelId}`;
+    const controllers = locs.map(() => new AbortController());
+    const onOuterAbort = () => {
+      for (const c of controllers) {
+        try {
+          c.abort();
+        } catch {
+          // Ignore abort errors during cleanup.
+        }
+      }
+    };
+    opts.signal.addEventListener("abort", onOuterAbort, { once: true });
+    type SingleResult = { ok: true; loc: string; text: string } | { ok: false; err: any };
+    const attempts: Array<Promise<SingleResult>> = locs.map((loc, i) => {
+      const ctrl = controllers[i];
+      const host = VertexAIService.getEndpointHost(loc);
+      const url =
+        `https://${host}/v1` +
+        `/projects/${encodeURIComponent(projectId)}` +
+        `/locations/${encodeURIComponent(loc)}` +
+        `/publishers/google/models/${encodeURIComponent(modelId)}:generateContent`;
+      return (async (): Promise<SingleResult> => {
+        try {
+          if (opts.signal.aborted) throw abortError();
+          const res = await fetchWithRetry(
+            url,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              body,
+            },
+            ctrl.signal
+          );
+          if (res.status === 401) this.clearToken();
+          if (!res.ok) {
+            const errBody = await res.text().catch(() => "");
+            throw new Error(
+              `Vertex AI request failed (HTTP ${res.status}): ${errBody.slice(0, 300)}`
+            );
+          }
+          const json = await res.json();
+          const parts: Array<{ text?: string; thought?: boolean }> | undefined =
+            json.candidates?.[0]?.content?.parts;
+          const text = (parts || [])
+            .filter((p) => p.text && !p.thought)
+            .map((p) => p.text as string)
+            .join("");
+          if (!text) throw new Error("Vertex AI returned an empty response");
+          return { ok: true, loc, text };
+        } catch (err) {
+          return { ok: false, err };
+        }
+      })();
+    });
+    let pending = attempts.length;
+    let lastErr: any = null;
+    const firstSuccess = new Promise<{ loc: string; text: string }>((resolve, reject) => {
+      attempts.forEach((p) =>
+        p.then((r) => {
+          if (r.ok) {
+            resolve({ loc: r.loc, text: r.text });
+            return;
+          }
+          const failed = r as Extract<SingleResult, { ok: false }>;
+          lastErr = failed.err;
+          if (--pending === 0) reject(lastErr);
+        })
+      );
+    });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error("FALLBACK_TIMEOUT")), 45_000);
+    });
+    try {
+      const winner = await Promise.race([firstSuccess, timeoutPromise]);
+      this.resolvedModelLocations.set(cacheKey, winner.loc);
+      return winner.text;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      opts.signal.removeEventListener("abort", onOuterAbort);
+      for (const c of controllers) {
+        try {
+          c.abort();
+        } catch {
+          // Ignore abort errors during cleanup.
+        }
+      }
+    }
+  }
+
+  /**
+   * Runs the single-shot fallback while yielding empty thought chunks
+   * every 15s. The empty chunks produce no UI output (the consumer only
+   * acts on non-empty content) but they reset the consumer's 60s
+   * inactivity timer, so a slow fallback isn't killed for silence.
+   */
+  private async *fallbackWithKeepAlive(opts: {
+    projectId: string;
+    location: string;
+    model: string;
+    prompt: string;
+    base64Images: string[];
+    thinkingLevel?: string;
+    webSearch?: boolean;
+    signal: AbortSignal;
+  }): AsyncGenerator<{ type: "thought" | "text"; content: string }> {
+    let settled = false;
+    let result: string | null = null;
+    let failure: any = null;
+    const p = this.generateContent(opts).then(
+      (text) => {
+        settled = true;
+        result = text;
+      },
+      (err) => {
+        settled = true;
+        failure = err;
+      }
+    );
+    while (!settled) {
+      await Promise.race([p, new Promise((r) => setTimeout(r, 15_000))]);
+      if (!settled) yield { type: "thought", content: "" };
+    }
+    if (failure) throw failure;
+    yield { type: "text", content: result as string };
+  }
+
+  /**
    * Streamed generateContent against a publisher model. Yields text chunks.
    * Images are sent as inlineData parts, same as the Gemini provider.
    *
    * Reliability design: regions race in parallel (hedged), a first-chunk
    * deadline with one retry covers the case where every region stalls at
-   * once, and transient 429/5xx errors retry with backoff inside each
-   * attempt. A request only truly fails if every region fails.
+   * once, and transient 429/409/5xx errors retry with backoff inside each
+   * attempt. A request only truly fails if every region fails. If
+   * streaming fails before any chunk is shown, a single-shot
+   * GenerateContent call runs as a last resort so a complete answer
+   * still arrives instead of an error.
    */
   async *streamGenerateContent(
     opts: VertexStreamOptions
@@ -609,95 +838,93 @@ export class VertexAIService {
       .replace(/^publishers\/google\/models\//, "");
 
     const token = await this.getAccessToken();
-    const parts: any[] = [{ text: opts.prompt }];
-    for (const img of opts.base64Images) {
-      parts.push({ inlineData: { mimeType: "image/png", data: img } });
-    }
-    const generationConfig: any = {
-      candidateCount: 1,
-      maxOutputTokens: 12288,
-      temperature: 0.2,
-    };
-    if (opts.thinkingLevel && /^gemini-[34]/.test(modelId)) {
-      generationConfig.thinkingConfig = {
-        thinkingLevel: opts.thinkingLevel,
-        includeThoughts: true,
-      };
-    } else {
-      generationConfig.thinkingConfig = {
-        includeThoughts: true,
-      };
-    }
-    const body = JSON.stringify({
-      contents: [{ role: "user", parts }],
-      generationConfig,
-      // Google Search grounding: the model can search the live web.
-      // Billed per search query (5k free/month on Gemini 3.x, then $14/1k).
-      ...(opts.webSearch ? { tools: [{ googleSearch: {} }] } : {}),
+    const body = this.buildBody({
+      prompt: opts.prompt,
+      base64Images: opts.base64Images,
+      thinkingLevel: opts.thinkingLevel,
+      modelId,
+      webSearch: opts.webSearch,
     });
 
     const cacheKey = `${projectId}:${modelId}`;
-    const cachedLoc = this.resolvedModelLocations.get(cacheKey);
-    const isGlobalFirstModel = /^gemini-(3|4)(\.|-)/.test(modelId);
-    const candidateLocs: string[] = [];
-    const pushUnique = (loc?: string) => {
-      if (loc && !candidateLocs.includes(loc)) candidateLocs.push(loc);
-    };
-    if (cachedLoc) pushUnique(cachedLoc);
-    if (requestedLoc === "global" || isGlobalFirstModel) {
-      pushUnique("global");
-      pushUnique(requestedLoc);
-      pushUnique("us-central1");
-      pushUnique("europe-west2");
-    } else {
-      pushUnique(requestedLoc);
-      pushUnique("global");
-      pushUnique("us-central1");
-    }
+    const candidateLocs = this.candidateLocations(projectId, modelId, requestedLoc);
 
     const firstChunkTimeoutMs = opts.firstChunkTimeoutMs ?? FIRST_CHUNK_TIMEOUT_MS;
     const notFound = new Set<string>();
     let lastError = "";
-    for (let round = 0; round < 2; round++) {
-      const locs = candidateLocs.filter((l) => !notFound.has(l));
-      if (locs.length === 0) break;
-      try {
-        const handle = await this.hedgedFirstChunk(
-          locs,
-          (loc) => {
-            const host = VertexAIService.getEndpointHost(loc);
-            return (
-              `https://${host}/v1` +
-              `/projects/${encodeURIComponent(projectId)}` +
-              `/locations/${encodeURIComponent(loc)}` +
-              `/publishers/google/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`
-            );
-          },
-          token,
-          body,
-          opts.signal,
-          firstChunkTimeoutMs,
-          notFound
-        );
-        this.resolvedModelLocations.set(cacheKey, handle.loc);
-        for (const p of handle.firstParts) {
-          if (p.thought && p.text) {
-            yield { type: "thought", content: p.text };
-          } else if (!p.thought && p.text) {
-            yield { type: "text", content: p.text };
+    let yielded = false;
+    try {
+      for (let round = 0; round < 2; round++) {
+        const locs = candidateLocs.filter((l) => !notFound.has(l));
+        if (locs.length === 0) break;
+        try {
+          const handle = await this.hedgedFirstChunk(
+            locs,
+            (loc) => {
+              const host = VertexAIService.getEndpointHost(loc);
+              return (
+                `https://${host}/v1` +
+                `/projects/${encodeURIComponent(projectId)}` +
+                `/locations/${encodeURIComponent(loc)}` +
+                `/publishers/google/models/${encodeURIComponent(modelId)}:streamGenerateContent?alt=sse`
+              );
+            },
+            token,
+            body,
+            opts.signal,
+            firstChunkTimeoutMs,
+            notFound
+          );
+          this.resolvedModelLocations.set(cacheKey, handle.loc);
+          for (const p of handle.firstParts) {
+            if (p.thought && p.text) {
+              yielded = true;
+              yield { type: "thought", content: p.text };
+            } else if (!p.thought && p.text) {
+              yielded = true;
+              yield { type: "text", content: p.text };
+            }
           }
+          for await (const chunk of this.continueSse(handle, opts.signal)) {
+            yielded = true;
+            yield chunk;
+          }
+          return;
+        } catch (e: any) {
+          lastError = e?.message || String(e);
+          // Only the first-chunk deadline gets a retry round; other failures
+          // (all regions 404/409/auth) are definitive for this attempt.
+          if (e?.code === "FIRST_CHUNK_TIMEOUT" && round === 0) continue;
+          throw e;
         }
-        yield* this.continueSse(handle, opts.signal);
-        return;
-      } catch (e: any) {
-        lastError = e?.message || String(e);
-        // Only the first-chunk deadline gets a retry round; other failures
-        // (all regions 404/429/auth) are definitive for this attempt.
-        if (e?.code === "FIRST_CHUNK_TIMEOUT" && round === 0) continue;
-        throw e;
       }
+      throw new Error(lastError || "Vertex AI request failed in all regions");
+    } catch (e) {
+      // A cancelled request stays cancelled - never fall back after abort.
+      if (opts.signal.aborted) throw abortError();
+      // Streaming failed before anything was shown: last resort is the
+      // single-shot call. Only when nothing was shown yet, so partial
+      // output is never duplicated. If the fallback also fails, report
+      // the original streaming failure (the more diagnostic error).
+      if (!yielded) {
+        try {
+          yield* this.fallbackWithKeepAlive({
+            projectId,
+            location: requestedLoc,
+            model: modelId,
+            prompt: opts.prompt,
+            base64Images: opts.base64Images,
+            thinkingLevel: opts.thinkingLevel,
+            webSearch: opts.webSearch,
+            signal: opts.signal,
+          });
+          return;
+        } catch {
+          // Fallback also failed - fall through to the original error.
+        }
+      }
+      throw e;
     }
-    throw new Error(lastError || "Vertex AI request failed in all regions");
   }
 }
 
